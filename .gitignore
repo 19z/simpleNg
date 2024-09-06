@@ -1,0 +1,10 @@
+
+# Ignore all log files
+*.log
+
+# Ignore all files in the dist directory
+dist/
+
+# Ignore all files in the build directory
+build/
+.idea
