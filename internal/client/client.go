@@ -1,10 +1,10 @@
 package client
 
 import (
-	"log"
-	"net/http"
+	"crypto/tls"
 	"simpleNg/pkg/config"
 	"simpleNg/pkg/utils"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -31,33 +31,44 @@ func NewClient(cfg *config.ClientConfig) (*Client, error) {
 func (c *Client) connect() error {
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 5 * time.Second,
+		TLSClientConfig:  &tls.Config{InsecureSkipVerify: true},
 	}
 
-	conn, _, err := dialer.Dial(c.config.Domain, nil)
-	if err != nil {
-		return err
+	var url string
+	var err error
+	var conn *websocket.Conn
+	if strings.HasPrefix(c.config.Domain, "ws://") || strings.HasPrefix(c.config.Domain, "wss://") {
+		url = c.config.Domain
+	} else {
+		for _, protocol := range []string{"ws://", "wss://"} {
+			url = protocol + c.config.Domain
+			conn, _, err = dialer.Dial(url, nil)
+			if err == nil {
+				c.conn = conn
+				break
+			}
+		}
+		if err != nil {
+			return err
+		}
 	}
-
-	c.conn = conn
 	return nil
 }
 
-func (c *Client) HandleRequest(w http.ResponseWriter, r *http.Request) {
-	if c.conn == nil {
-		http.Error(w, "WebSocket connection not established", http.StatusInternalServerError)
+func (c *Client) MessageHandler() error {
+	for {
+		_, data, err := c.conn.ReadMessage()
+		if err != nil {
+			return err
+		}
+		go c.httpRequestToWebSocket(data)
+	}
+}
+
+func (c *Client) httpRequestToWebSocket(data []byte) {
+	requestId, request, err := utils.ResumeRequest(data, c.config.Port)
+	if err != nil {
 		return
 	}
-
-	// Forward the request to the local service
-	resp, err := http.DefaultClient.Do(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Send the response back to the server
-	err = utils.CopyResponse(c.conn, resp)
-	if err != nil {
-		log.Printf("Failed to send response: %v", err)
-	}
+	err = utils.ClientRequest(requestId, c.conn, request)
 }

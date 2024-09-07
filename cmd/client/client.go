@@ -1,9 +1,7 @@
 package client
 
 import (
-	"fmt"
 	"log"
-	"net/http"
 	"simpleNg/internal/client"
 	"simpleNg/pkg/config"
 	"simpleNg/pkg/logger"
@@ -16,6 +14,9 @@ func Run(port int, domain string) error {
 		Port:   port,
 		Domain: domain,
 	}
+	if port == 0 {
+		cfg.Port = 8080
+	}
 
 	clientInstance, err := client.NewClient(cfg)
 	if err != nil {
@@ -24,6 +25,9 @@ func Run(port int, domain string) error {
 
 	log.Printf("Client started, connecting to %s", domain)
 
-	http.HandleFunc("/", clientInstance.HandleRequest)
-	return http.ListenAndServe(fmt.Sprintf(":%d", port), nil)
+	err = clientInstance.MessageHandler()
+	if err != nil {
+		return err
+	}
+	return nil
 }

@@ -15,14 +15,17 @@ func Run(port int) error {
 	cfg := &config.ServerConfig{
 		Port: port,
 	}
+	if port == 0 {
+		cfg.Port = 8066
+	}
 
 	serverInstance, err := server.NewServer(cfg)
 	if err != nil {
 		return err
 	}
 
-	log.Printf("Server started, listening on port %d", port)
-
+	go serverInstance.MessageHandler()
 	http.HandleFunc("/", serverInstance.HandleRequest)
-	return http.ListenAndServe(fmt.Sprintf(":%d", port), nil)
+	log.Printf("Server started, listening on port %d", cfg.Port)
+	return http.ListenAndServe(fmt.Sprintf(":%d", cfg.Port), nil)
 }
