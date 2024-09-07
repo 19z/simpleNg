@@ -153,8 +153,8 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 			break
 		}
-		log.Printf("Received message from client: %v, %s", message[0:8], string(message[8:100]))
-		socketMessages <- message
+		log.Printf("Received message from client: %v %d %s", message[0:8], len(message), string(message[8:100]))
+		socketMessages <- utils.GzipDecode(message)
 	}
 }
 

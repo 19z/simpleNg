@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httputil"
+	"strings"
 )
 
 // CopyRequest 服务器端
@@ -24,7 +25,7 @@ func CopyRequest(requestId uint32, conn *websocket.Conn, req *http.Request) erro
 	prefix := []byte{0xff, 0x00, 0x00, 0x00}
 	prefix = append(prefix, make([]byte, 4)...)
 	binary.LittleEndian.PutUint32(prefix[4:], requestId)
-	err = conn.WriteMessage(websocket.BinaryMessage, append(prefix, requestBuf.Bytes()...))
+	err = conn.WriteMessage(websocket.BinaryMessage, GzipEncode(append(prefix, requestBuf.Bytes()...)))
 	if err != nil {
 		return err
 	}
@@ -62,6 +63,71 @@ func ResumeRequest(data []byte, port int) (uint32, *http.Request, error) {
 	return requestId, req, nil
 }
 
+func ResumeRequest2(data []byte, port int) (uint32, *http.Request, error) {
+	// 验证前缀是否正确
+	if len(data) < 8 || data[0] != 0xff || data[1] != 0x00 || data[2] != 0x00 || data[3] != 0x00 {
+		return 0, nil, ErrInvalidRequestPrefix
+	}
+
+	// 读取requestId
+	requestId := binary.LittleEndian.Uint32(data[4:8])
+
+	// 去掉前缀，获取原始请求数据
+	requestBuf := data[8:]
+	// 解析请求字符串
+	parts := bytes.SplitN(requestBuf, []byte("\r\n\r\n"), 2)
+	headerLines := bytes.Split(parts[0], []byte("\r\n"))
+	body := parts[1]
+
+	// 解析请求行
+	requestLine := strings.Split(strings.TrimSpace(string(headerLines[0])), " ")
+	method := requestLine[0]
+	path := requestLine[1]
+
+	// 解析请求头
+	headers := make(http.Header)
+	for _, line := range headerLines[1:] {
+		headerParts := strings.SplitN(string(line), ": ", 2)
+		headers.Add(headerParts[0], headerParts[1])
+	}
+
+	// 创建 http.Request 对象
+	req, err := http.NewRequest(method, path, bytes.NewReader(body))
+	if err != nil {
+		fmt.Println("Error creating request:", err)
+		return 0, nil, err
+	}
+
+	// 设置请求头
+	req.Header = headers
+
+	// 设置请求的 Content-Length
+	req.ContentLength = int64(len(body))
+
+	// 替换host为本地的port端口
+	req.Host = fmt.Sprintf("127.0.0.1:%d", port)
+	req.URL.Host = req.Host
+	req.URL.Scheme = "http"
+	req.RequestURI = "" // 将请求URI设置为空字符串，否则会出现错误
+
+	return requestId, req, nil
+}
+
+func ResumeRequest3(data []byte) (uint32, []byte, error) {
+	// 验证前缀是否正确
+	if len(data) < 8 || data[0] != 0xff || data[1] != 0x00 || data[2] != 0x00 || data[3] != 0x00 {
+		return 0, nil, ErrInvalidRequestPrefix
+	}
+
+	// 读取requestId
+	requestId := binary.LittleEndian.Uint32(data[4:8])
+
+	// 去掉前缀，获取原始请求数据
+	requestBuf := data[8:]
+
+	return requestId, requestBuf, nil
+}
+
 // 拆分成小块
 func split(data []byte, size int) [][]byte {
 	chunks := make([][]byte, 0, (len(data)+size-1)/size)
@@ -82,7 +148,11 @@ func split(data []byte, size int) [][]byte {
 // 如果连接失败，则返回 0xff000004 + requestId
 func ClientRequest(requestId uint32, conn *websocket.Conn, req *http.Request) error {
 	// 发送 HTTP 请求并获取响应
-	client := &http.Client{}
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	log.Printf("request: %v", req)
 	resp, err := client.Do(req)
 	if err != nil {
@@ -90,13 +160,17 @@ func ClientRequest(requestId uint32, conn *websocket.Conn, req *http.Request) er
 		return WriteToConnect(0xff000004, requestId, []byte(err.Error()), conn)
 	}
 	defer resp.Body.Close()
+	return ClientResponse(requestId, conn, resp)
+}
+
+func ClientResponse(requestId uint32, conn *websocket.Conn, resp *http.Response) error {
 	// 读取响应头
 	respBytes, err := httputil.DumpResponse(resp, false)
 	if err != nil {
 		return WriteToConnect(0xff000004, requestId, []byte(err.Error()), conn)
 	}
 	// 读取响应内容并分块发送
-	buffer := make([]byte, 2048)
+	buffer := make([]byte, 4096)
 	for {
 		n, err := resp.Body.Read(buffer)
 		if err != nil && err != io.EOF {
@@ -160,8 +234,9 @@ func WriteToConnect(prefix uint32, requestId uint32, body []byte, conn *websocke
 	binary.BigEndian.PutUint32(data, prefix)
 	binary.BigEndian.PutUint32(data[4:], requestId)
 	copy(data[8:], body)
-	log.Printf("write: %v %s", data[0:8], string(body[0:min(len(body), 100)]))
-	err := conn.WriteMessage(websocket.BinaryMessage, data)
+	//zipData := GzipEncode(data)
+	//log.Printf("write: %v %d %s", data[0:8], len(zipData), string(body[0:min(len(body), 100)]))
+	err := conn.WriteMessage(websocket.BinaryMessage, GzipEncode(data))
 	if err != nil {
 		return err
 	}
@@ -193,35 +268,38 @@ func ParseMessage(message []byte) (prefix uint32, requestId uint32, body []byte,
 }
 
 // GzipEncode 函数将输入的字节切片进行 Gzip 压缩并返回压缩后的字节切片
-func GzipEncode(data []byte) ([]byte, error) {
+func GzipEncode(data []byte) []byte {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 
 	_, err := gz.Write(data)
 	if err != nil {
-		return nil, err
+		log.Println(err)
+		return nil
 	}
 
 	if err := gz.Close(); err != nil {
-		return nil, err
+		return nil
 	}
 
-	return buf.Bytes(), nil
+	return buf.Bytes()
 }
 
 // GzipDecode 函数将输入的 Gzip 压缩字节切片进行解压缩，并返回解压后的字节切片
-func GzipDecode(data []byte) ([]byte, error) {
+func GzipDecode(data []byte) []byte {
 	buf := bytes.NewBuffer(data)
 	gz, err := gzip.NewReader(buf)
 	if err != nil {
-		return nil, err
+		log.Println(err)
+		return nil
 	}
 	defer gz.Close()
 
 	uncompressedData, err := io.ReadAll(gz)
 	if err != nil {
-		return nil, err
+		log.Println(err)
+		return nil
 	}
 
-	return uncompressedData, nil
+	return uncompressedData
 }
