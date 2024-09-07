@@ -64,7 +64,7 @@ jobs:
           release_name: Release ${{ steps.create_tag.outputs.tag_name }}
           body: |
             Automated release created by GitHub Actions.
-          draft: true
+          draft: false
           prerelease: false
 
       - name: Upload Release Assets
