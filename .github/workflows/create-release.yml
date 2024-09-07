@@ -3,10 +3,10 @@ name: Create Release
 on:
   workflow_dispatch:
     inputs:
-      tag_prefix:
-        description: 'Tag prefix (optional)'
+      version:
+        description: 'Version number'
         required: false
-        default: 'v'
+        default: 'v0.0.1'
 
 jobs:
   create-release:
@@ -24,6 +24,7 @@ jobs:
 
       - name: Build for multiple platforms
         run: |
+          go mod tidy
           export GOOS=linux
           export GOARCH=amd64
           export CGO_ENABLED=0
@@ -41,11 +42,12 @@ jobs:
           export GOOS=windows
           export GOARCH=amd64
           go build -o simpleNg.windows.amd64.exe .
+          ls -ahl
 
       - name: Create tag with timestamp
         id: create_tag
         run: |
-          TAG_NAME="${{ github.event.inputs.tag_prefix }}$(date -u +'%Y.%m%d.%H%M')"
+          TAG_NAME="${{ github.event.inputs.version }}"
           echo "::set-output name=tag_name::$TAG_NAME"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -62,8 +64,7 @@ jobs:
           release_name: Release ${{ steps.create_tag.outputs.tag_name }}
           body: |
             Automated release created by GitHub Actions.
-            Commit message: $(git log -1 --pretty=%B)
-          draft: false
+          draft: true
           prerelease: false
 
       - name: Upload Release Assets
@@ -72,14 +73,37 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: |
-            simpleNg.linux.amd64
-            simpleNg.linux.arm64
-            simpleNg.darwin.amd64
-            simpleNg.windows.amd64.exe
-          asset_name: |
-            simpleNg.linux.amd64
-            simpleNg.linux.arm64
-            simpleNg.darwin.amd64
-            simpleNg.windows.amd64.exe
+          asset_path: simpleNg.linux.amd64
+          asset_name: simpleNg.linux.amd64
           asset_content_type: application/octet-stream
+
+      - name: Upload Release Assets
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: simpleNg.linux.arm64
+          asset_name: simpleNg.linux.arm64
+          asset_content_type: application/octet-stream
+
+      - name: Upload Release Assets
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: simpleNg.darwin.amd64
+          asset_name: simpleNg.darwin.amd64
+          asset_content_type: application/octet-stream
+
+      - name: Upload Release Assets
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: simpleNg.windows.amd64.exe
+          asset_name: simpleNg.windows.amd64.exe
+          asset_content_type: application/octet-stream
+
