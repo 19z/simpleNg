@@ -41,6 +41,42 @@ Preparation:
    3. You can use `nohup ./simpleNg -type=server -port=8066 > ./server.log 2>&1 &` to run the server in the background, with logs output to `./server.log`. Alternatively, you can follow some online tutorials to configure it as a self-starting service.
 3. Use `Nginx` to proxy your `simpleNg` service (optional). Below is a sample configuration file for reference:
 
+
+```nginx
+
+server {
+    listen 80;
+    listen 443 ssl http2;
+    server_name *.simple-ng.example.com;
+    
+    if ($server_port !~ 443){
+        rewrite ^(/.*)$ https://$host$1 permanent;
+    }
+    
+    ssl_certificate /etc/letsencrypt/live/simple-ng.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/simple-ng.example.com/privkey.pem;
+    ssl_protocols TLSv1 TLSv1.1 TLSv1.2;
+    ssl_ciphers "EECDH+AESGCM:EDH+AESGCM:AES256+EECDH:AES256+EDH";
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+    add_header Strict-Transport-Security "max-age=31536000";
+    error_page 497  https://$host$request_uri;
+    
+    location / {
+        proxy_pass http://127.0.0.1:8066;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_redirect off;
+        proxy_buffering off;
+    }
+}
+```
+
 **Client Side**:
 
 The following example assumes you want to expose the local HTTP service at `127.0.0.1:8080` to the public internet.
