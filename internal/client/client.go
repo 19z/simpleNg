@@ -43,8 +43,13 @@ func (c *Client) connect() error {
 	var conn *websocket.Conn
 	if strings.HasPrefix(c.config.Domain, "ws://") || strings.HasPrefix(c.config.Domain, "wss://") {
 		url = c.config.Domain
+		conn, _, err = dialer.Dial(url, nil)
+		if err != nil {
+			return err
+		}
+		c.conn = conn
 	} else {
-		for _, protocol := range []string{"ws://", "wss://"} {
+		for _, protocol := range []string{"wss://", "ws://"} {
 			url = protocol + c.config.Domain
 			conn, _, err = dialer.Dial(url, nil)
 			if err == nil {
