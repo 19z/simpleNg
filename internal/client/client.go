@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"simpleNg/pkg/config"
 	"simpleNg/pkg/utils"
-	"strconv"
 	"strings"
 	"time"
 
@@ -72,7 +71,7 @@ func (c *Client) MessageHandler() error {
 }
 
 func (c *Client) httpRequestToWebSocket(data []byte) {
-	requestId, request, err := utils.ResumeRequest2(data, c.config.Port)
+	requestId, request, err := utils.ResumeRequest2(data, c.config.Local)
 	if err != nil {
 		return
 	}
@@ -86,7 +85,7 @@ func (c *Client) httpRequestToWebSocket2(data []byte) {
 		log.Println(err)
 		return
 	}
-	conn, err := net.Dial("tcp", "127.0.0.1:"+strconv.Itoa(c.config.Port))
+	conn, err := net.Dial("tcp", c.config.Local)
 	if err != nil {
 		log.Println(err)
 		return
@@ -95,7 +94,7 @@ func (c *Client) httpRequestToWebSocket2(data []byte) {
 	isSuccess := false
 	defer func() {
 		if !isSuccess {
-			utils.WriteToConnect(0xff000004, requestId, []byte(err.Error()), c.conn)
+			_ = utils.WriteToConnect(0xff000004, requestId, []byte(err.Error()), c.conn)
 		}
 	}()
 

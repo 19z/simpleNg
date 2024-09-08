@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"bufio"
 	"bytes"
 	"compress/gzip"
 	"encoding/binary"
@@ -34,36 +33,7 @@ func CopyRequest(requestId uint32, conn *websocket.Conn, req *http.Request) erro
 
 var ErrInvalidRequestPrefix = fmt.Errorf("invalid request prefix")
 
-// ResumeRequest 客户端
-// 这个函数的作用是将一个从 websocket 中读取的请求恢复为一个HTTP请求。它假设请求没有被修改过并且返回一个错误如果读取请求失败。
-func ResumeRequest(data []byte, port int) (uint32, *http.Request, error) {
-	// 验证前缀是否正确
-	if len(data) < 8 || data[0] != 0xff || data[1] != 0x00 || data[2] != 0x00 || data[3] != 0x00 {
-		return 0, nil, ErrInvalidRequestPrefix
-	}
-
-	// 读取requestId
-	requestId := binary.LittleEndian.Uint32(data[4:8])
-
-	// 去掉前缀，获取原始请求数据
-	requestBuf := data[8:]
-
-	// 创建一个新的请求
-	req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(requestBuf)))
-	if err != nil {
-		return 0, nil, err
-	}
-
-	// 替换host为本地的port端口
-	req.Host = fmt.Sprintf("127.0.0.1:%d", port)
-	req.URL.Host = req.Host
-	req.URL.Scheme = "http"
-	req.RequestURI = "" // 将请求URI设置为空字符串，否则会出现错误
-
-	return requestId, req, nil
-}
-
-func ResumeRequest2(data []byte, port int) (uint32, *http.Request, error) {
+func ResumeRequest2(data []byte, local string) (uint32, *http.Request, error) {
 	// 验证前缀是否正确
 	if len(data) < 8 || data[0] != 0xff || data[1] != 0x00 || data[2] != 0x00 || data[3] != 0x00 {
 		return 0, nil, ErrInvalidRequestPrefix
@@ -105,7 +75,7 @@ func ResumeRequest2(data []byte, port int) (uint32, *http.Request, error) {
 	req.ContentLength = int64(len(body))
 
 	// 替换host为本地的port端口
-	req.Host = fmt.Sprintf("127.0.0.1:%d", port)
+	req.Host = local
 	req.URL.Host = req.Host
 	req.URL.Scheme = "http"
 	req.RequestURI = "" // 将请求URI设置为空字符串，否则会出现错误
@@ -126,19 +96,6 @@ func ResumeRequest3(data []byte) (uint32, []byte, error) {
 	requestBuf := data[8:]
 
 	return requestId, requestBuf, nil
-}
-
-// 拆分成小块
-func split(data []byte, size int) [][]byte {
-	chunks := make([][]byte, 0, (len(data)+size-1)/size)
-	for len(data) > size {
-		chunks = append(chunks, data[:size])
-		data = data[size:]
-	}
-	if len(data) > 0 {
-		chunks = append(chunks, data)
-	}
-	return chunks
 }
 
 // ClientRequest 客户端

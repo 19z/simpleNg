@@ -5,6 +5,6 @@ type ServerConfig struct {
 }
 
 type ClientConfig struct {
-	Port   int
+	Local  string
 	Domain string
 }
