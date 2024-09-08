@@ -39,10 +39,22 @@ jobs:
           export GOARCH=amd64
           go build -o simpleNg.darwin.amd64 .
 
+          export GOOS=darwin
+          export GOARCH=arm64
+          go build -o simpleNg.darwin.arm64 .
+
           export GOOS=windows
           export GOARCH=amd64
           go build -o simpleNg.windows.amd64.exe .
           ls -ahl
+
+      - name: Delete existing tag if it exists
+        run: |
+          TAG_NAME="${{ github.event.inputs.version }}"
+          if git rev-parse $TAG_NAME >/dev/null 2>&1; then
+            git tag -d $TAG_NAME
+            git push --delete origin $TAG_NAME
+          fi
 
       - name: Create tag with timestamp
         id: create_tag
@@ -52,7 +64,17 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a $TAG_NAME -m "$(git log -1 --pretty=%B)"
-          # git push origin $TAG_NAME
+          git push origin $TAG_NAME
+
+      - name: Delete existing release if it exists
+        run: |
+          TAG_NAME="${{ github.event.inputs.version }}"
+          RELEASE_ID=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG_NAME" | jq -r '.id')
+          if [ "$RELEASE_ID" != "null" ]; then
+            curl -X DELETE -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID"
+          fi
 
       - name: Create GitHub Release
         id: create_release
@@ -103,7 +125,16 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: simpleNg.darwin.arm64
+          asset_name: simpleNg.darwin.arm64
+          asset_content_type: application/octet-stream
+
+      - name: Upload Release Assets
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: simpleNg.windows.amd64.exe
           asset_name: simpleNg.windows.amd64.exe
           asset_content_type: application/octet-stream
-
