@@ -3,33 +3,40 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"log"
 	"net/http"
 	"simpleNg/pkg/config"
 	"simpleNg/pkg/utils"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
+type connection struct {
+	conn *websocket.Conn
+	mu   sync.Mutex
+}
+
 type Server struct {
 	config *config.ServerConfig
-	conns  map[string]*websocket.Conn
+	conns  map[string]*connection
 }
 
 func NewServer(cfg *config.ServerConfig) (*Server, error) {
 	return &Server{
 		config: cfg,
-		conns:  make(map[string]*websocket.Conn),
+		conns:  make(map[string]*connection),
 	}, nil
 }
 
 // getConnectWithDomain returns a WebSocket connection associated with the given
 // host. If the connection is not established within {trySeconds} seconds, it returns an
 // error.
-func (s *Server) getConnectWithDomain(host string, trySeconds int) (*websocket.Conn, error) {
-	var conn *websocket.Conn
+func (s *Server) getConnectWithDomain(host string, trySeconds int) (*connection, error) {
+	var conn *connection
 	var ok bool
 	var err error
 
@@ -57,7 +64,7 @@ func (s *Server) getConnectWithDomain(host string, trySeconds int) (*websocket.C
 
 type serverRequestContext struct {
 	requestId    uint32
-	conn         *websocket.Conn
+	conn         *connection
 	req          *http.Request
 	writer       *http.ResponseWriter
 	isHeaderSend bool
@@ -81,7 +88,8 @@ func (s *Server) HandleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	// Forward the request to the client
 	requestId := utils.GetNextRequestId()
-	err = utils.CopyRequest(requestId, conn, r)
+
+	err = s.CopyRequest(requestId, conn, r)
 	if err != nil {
 		log.Printf("Failed to forward request: %v", err)
 		http.Error(w, "Failed to forward request:"+r.URL.String(), http.StatusInternalServerError)
@@ -110,8 +118,8 @@ func (s *Server) HandleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-var socketMessages = make(chan []byte, 1024)       // 用于接收来自客户端的请求结果消息
-var closedHosts = make(chan *websocket.Conn, 1024) // 用于通知客户端连接已关闭
+var socketMessages = make(chan []byte, 1024)   // 用于接收来自客户端的请求结果消息
+var closedHosts = make(chan *connection, 1024) // 用于通知客户端连接已关闭
 
 func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	upgrader := websocket.Upgrader{
@@ -128,14 +136,14 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	host := r.Host
 	if oldConn, ok := s.conns[host]; ok {
-		_ = oldConn.Close()
+		_ = oldConn.conn.Close()
 		closedHosts <- oldConn
 	}
+	s.conns[host] = &connection{conn: conn}
 	conn.SetCloseHandler(func(code int, text string) error {
-		closedHosts <- conn
+		closedHosts <- s.conns[host]
 		return nil
 	})
-	s.conns[host] = conn
 
 	log.Printf("WebSocket connection established for host: %s", host)
 
@@ -145,7 +153,7 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Printf("Failed to read message: %v", err)
 			if oldConn, ok := s.conns[host]; ok {
-				if oldConn == conn {
+				if oldConn.conn == conn {
 					delete(s.conns, host)
 				}
 			}
@@ -154,8 +162,28 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		log.Printf("Received message from client: %v %d %s", message[0:8], len(message), string(message[8:100]))
-		socketMessages <- utils.GzipDecode(message)
+		socketMessages <- message
 	}
+}
+
+// CopyRequest 服务器端
+// 这个函数的作用是将一个HTTP请求写入到一个WebSocket连接中。它假设请求没有被修改过，并且返回一个错误如果写入或读取请求失败。
+func (s *Server) CopyRequest(requestId uint32, conn *connection, req *http.Request) error {
+	var requestBuf bytes.Buffer
+	err := req.Write(&requestBuf)
+	if err != nil {
+		return err
+	}
+	prefix := []byte{0xff, 0x00, 0x00, 0x00}
+	prefix = append(prefix, make([]byte, 4)...)
+	binary.LittleEndian.PutUint32(prefix[4:], requestId)
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	err = conn.conn.WriteMessage(websocket.BinaryMessage, append(prefix, requestBuf.Bytes()...))
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (ctx *serverRequestContext) Close() {
@@ -215,7 +243,7 @@ func (s *Server) MessageHandler() {
 					ctx.Close()
 				}
 			}
-			_ = conn.Close()
+			_ = conn.conn.Close()
 
 		case <-ticker.C:
 			// 检查是否有超时的请求

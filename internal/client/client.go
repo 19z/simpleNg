@@ -3,12 +3,16 @@ package client
 import (
 	"bufio"
 	"crypto/tls"
+	"encoding/binary"
+	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"simpleNg/pkg/config"
 	"simpleNg/pkg/utils"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -17,6 +21,7 @@ import (
 type Client struct {
 	config *config.ClientConfig
 	conn   *websocket.Conn
+	mu     sync.Mutex
 }
 
 func NewClient(cfg *config.ClientConfig) (*Client, error) {
@@ -71,16 +76,8 @@ func (c *Client) MessageHandler() error {
 			return err
 		}
 		//go c.httpRequestToWebSocket(data)
-		go c.httpRequestToWebSocket2(utils.GzipDecode(data))
+		go c.httpRequestToWebSocket2(data)
 	}
-}
-
-func (c *Client) httpRequestToWebSocket(data []byte) {
-	requestId, request, err := utils.ResumeRequest2(data, c.config.Local)
-	if err != nil {
-		return
-	}
-	err = utils.ClientRequest(requestId, c.conn, request)
 }
 
 func (c *Client) httpRequestToWebSocket2(data []byte) {
@@ -99,7 +96,11 @@ func (c *Client) httpRequestToWebSocket2(data []byte) {
 	isSuccess := false
 	defer func() {
 		if !isSuccess {
-			_ = utils.WriteToConnect(0xff000004, requestId, []byte(err.Error()), c.conn)
+			if err != nil {
+				_ = c.WriteToConnect(0xff000004, requestId, []byte(err.Error()))
+			} else {
+				_ = c.WriteToConnect(0xff000004, requestId, []byte("timeout"))
+			}
 		}
 	}()
 
@@ -115,104 +116,92 @@ func (c *Client) httpRequestToWebSocket2(data []byte) {
 		log.Println(err)
 		return
 	}
-	err = utils.ClientResponse(requestId, c.conn, resp)
+	err = c.ClientResponse(requestId, resp)
 	if err != nil {
 		log.Println(err)
 		return
 	}
 	isSuccess = true
+}
 
-	/*
+func (c *Client) ClientResponse(requestId uint32, resp *http.Response) error {
+	// 读取响应头
+	respBytes, err := httputil.DumpResponse(resp, false)
+	if err != nil {
+		return c.WriteToConnect(0xff000004, requestId, []byte(err.Error()))
+	}
+	// 读取响应内容并分块发送
+	buffer := make([]byte, 4096)
+	for {
+		n, err := resp.Body.Read(buffer)
+		if err != nil && err != io.EOF {
+			// 读取失败，返回 0xff000004 + requestId
+			//errCode := make([]byte, 8)
+			//binary.BigEndian.PutUint32(errCode, 0xff000004)
+			//binary.BigEndian.PutUint32(errCode[4:], requestId)
+			//log.Printf("write: %v", errCode)
+			//conn.WriteMessage(websocket.BinaryMessage, errCode)
+			return c.WriteToConnect(0xff000004, requestId, nil)
+		}
 
-		// 接收响应
-		reader := bufio.NewReader(conn)
-		// 读取 并解析 响应头
-		var headers bytes.Buffer
-		var contentLength int64
-		var transferEncoding string
-		for {
-			line, err := reader.ReadString('\n')
+		if err == io.EOF {
+			// 正文结束，发送 0xff000003 + requestId
+			//endPrefix := make([]byte, 8)
+			//binary.BigEndian.PutUint32(endPrefix, 0xff000003)
+			//binary.BigEndian.PutUint32(endPrefix[4:], requestId)
+			//log.Printf("write: %v %s", endPrefix, string(buffer[:n]))
+			//conn.WriteMessage(websocket.BinaryMessage, endPrefix)
+			if respBytes != nil {
+				err = c.WriteToConnect(0xff000003, requestId, append(respBytes, buffer[:n]...))
+				respBytes = nil
+				return err
+			}
+			err = c.WriteToConnect(0xff000003, requestId, buffer[:n])
 			if err != nil {
-				fmt.Println("Error reading response headers:", err)
-				return
+				return err
 			}
-			// 如果 line 以小写字母开头，则将其转换为大写符合标准的 HTTP 头（注意不要影响 冒号右侧的内容）
-			if line[0] >= 'a' && line[0] <= 'z' {
-				fields := strings.SplitN(line, ":", 2)
-				if len(fields) == 2 {
-					fields[0] = http.CanonicalHeaderKey(fields[0])
-					line = strings.Join(fields, ":") + "\n"
+			break
+		} else if n > 0 {
+			// 发送数据块
+			//prefix := make([]byte, 8)
+			//binary.BigEndian.PutUint32(prefix, 0xff000002)
+			//binary.BigEndian.PutUint32(prefix[4:], requestId)
+			//log.Printf("write: %v %s", prefix, string(buffer[:n]))
+			//conn.WriteMessage(websocket.BinaryMessage, append(prefix, buffer[:n]...))
+			if respBytes != nil {
+				err = c.WriteToConnect(0xff000002, requestId, append(respBytes, buffer[:n]...))
+				respBytes = nil
+				if err != nil {
+					return err
 				}
-			}
-
-			if line == "\r\n" {
-				headers.WriteString(line)
-				break
-			} else if strings.HasPrefix(line, "Content-Length:") {
-				contentLength, _ = strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(line, "Content-Length:")), 10, 64)
-				headers.WriteString(line)
-			} else if strings.HasPrefix(line, "Transfer-Encoding:") {
-				transferEncoding = strings.TrimSpace(strings.TrimPrefix(line, "Transfer-Encoding:"))
-				headers.WriteString(line)
-			} else if strings.HasPrefix(line, "Connection:") {
-				if strings.Contains(strings.ToLower(line), "keep-alive") {
-					// 替换为 connection: close
-					headers.WriteString("Connection: close\r\n")
-				} else {
-					headers.WriteString(line)
-				}
-			} else if strings.HasPrefix(line, "Host:") {
-				headers.WriteString("Host: 127.0.0.1\r\n")
 			} else {
-				headers.WriteString(line)
-			}
-		}
-		// 将 Http 头发送到 WebSocket
-		if contentLength == 0 && transferEncoding == "" {
-			// 没有正文
-			err := utils.WriteToConnect(0xff000003, requestId, []byte(headers.String()), c.conn)
-			if err != nil {
-				return
-			}
-		} else {
-			err := utils.WriteToConnect(0xff000002, requestId, []byte(headers.String()), c.conn)
-			if err != nil {
-				return
-			}
-		}
-
-		// 读取响应体
-		if contentLength > 0 && contentLength < 10240 {
-			var body bytes.Buffer
-			_, err = io.CopyN(&body, reader, contentLength)
-			if err != nil {
-				fmt.Println("Error reading response body:", err)
-				return
-			}
-			// 将响应体发送到 WebSocket
-			err := utils.WriteToConnect(0xff000002, requestId, body.Bytes(), c.conn)
-			if err != nil {
-				return
-			}
-		} else {
-			// 读取很大的响应体或者 transferEncoding == "chunked" 的情况
-			for {
-				// 每次读取 2048 个字节
-				var buf [2048]byte
-				n, err := reader.Read(buf[:])
+				err = c.WriteToConnect(0xff000002, requestId, buffer[:n])
 				if err != nil {
-					fmt.Println("Error reading response body:", err)
-					return
+					return err
 				}
-				// 对于 transferEncoding == "chunked" 的情况，需要进行解析 0\r\n\r\n 作为结束标记。
-
-				// 将响应体发送到 WebSocket
-				err = utils.WriteToConnect(0xff000002, requestId, buf[:n], c.conn)
-				if err != nil {
-					return
-				}
-
 			}
+
 		}
-	*/
+	}
+
+	return nil
+}
+
+func (c *Client) WriteToConnect(prefix uint32, requestId uint32, body []byte) error {
+	if body == nil {
+		body = []byte{}
+	}
+	data := make([]byte, 8+len(body))
+	binary.BigEndian.PutUint32(data, prefix)
+	binary.BigEndian.PutUint32(data[4:], requestId)
+	copy(data[8:], body)
+	//zipData := GzipEncode(data)
+	//log.Printf("write: %v %d %s", data[0:8], len(zipData), string(body[0:min(len(body), 100)]))
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	err := c.conn.WriteMessage(websocket.BinaryMessage, data)
+	if err != nil {
+		return err
+	}
+	return nil
 }
