@@ -71,7 +71,7 @@ type serverRequestContext struct {
 	closeSignal  chan bool
 }
 
-var serverRequestContexts = make(map[uint32]*serverRequestContext)
+var serverRequestContexts = sync.Map{} //make(map[uint32]*serverRequestContext)
 
 func (s *Server) HandleRequest(w http.ResponseWriter, r *http.Request) {
 	host := r.Host
@@ -95,26 +95,29 @@ func (s *Server) HandleRequest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to forward request:"+r.URL.String(), http.StatusInternalServerError)
 		return
 	}
-	serverRequestContexts[requestId] = &serverRequestContext{
+	_context := &serverRequestContext{
 		requestId:   requestId,
 		conn:        conn,
 		req:         r,
 		writer:      &w,
 		closeSignal: make(chan bool),
 	}
+	serverRequestContexts.Store(requestId, _context)
 
 	// Wait for the response from the client
 	// 这里结束函数，就直接返回了？？要如何处理，让它一直等待，直到客户端关闭或者在服务端其他地方主动关闭连接
 
 	select {
-	case <-serverRequestContexts[requestId].closeSignal:
+	case <-_context.closeSignal:
 		// Client closed the connection
 		log.Printf("http request end for request %d", requestId)
-		delete(serverRequestContexts, requestId)
+		//delete(serverRequestContexts, requestId)
+		serverRequestContexts.Delete(requestId)
 	case <-time.After(time.Minute * 3):
 		// Timeout after 3 minute
 		log.Printf("Timeout for request %d", requestId)
-		delete(serverRequestContexts, requestId)
+		//delete(serverRequestContexts, requestId)
+		serverRequestContexts.Delete(requestId)
 	}
 }
 
@@ -207,12 +210,12 @@ func (s *Server) MessageHandler() {
 				log.Printf("Failed to parse message: %v", err)
 				continue
 			}
-
-			ctx, ok := serverRequestContexts[requestId]
+			_ctx, ok := serverRequestContexts.Load(requestId)
 			if !ok {
 				log.Printf("Failed to find request context for requestId: %d", requestId)
 				continue
 			}
+			var ctx *serverRequestContext = _ctx.(*serverRequestContext)
 
 			switch prefix {
 			case 0xff000002:
@@ -238,17 +241,19 @@ func (s *Server) MessageHandler() {
 			}
 
 		case conn := <-closedHosts:
-			for _, ctx := range serverRequestContexts {
-				if ctx.conn == conn {
+			serverRequestContexts.Range(func(key, value interface{}) bool {
+				if ctx, ok := value.(*serverRequestContext); ok && ctx.conn == conn {
 					ctx.Close()
 				}
-			}
+				return true
+			})
 			_ = conn.conn.Close()
 
 		case <-ticker.C:
 			// 检查是否有超时的请求
 			now := time.Now()
-			for _, ctx := range serverRequestContexts {
+			serverRequestContexts.Range(func(key, value interface{}) bool {
+				ctx := value.(*serverRequestContext)
 				if ctx.req.Context().Err() != nil {
 					ctx.Close()
 				} else {
@@ -257,7 +262,8 @@ func (s *Server) MessageHandler() {
 						ctx.Close()
 					}
 				}
-			}
+				return true
+			})
 		}
 	}
 }
