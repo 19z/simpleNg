@@ -76,7 +76,7 @@ func (c *Client) MessageHandler() error {
 			return err
 		}
 		//go c.httpRequestToWebSocket(data)
-		go c.httpRequestToWebSocket2(data)
+		go c.httpRequestToWebSocket2(utils.GzipDecode(data))
 	}
 }
 
@@ -199,7 +199,7 @@ func (c *Client) WriteToConnect(prefix uint32, requestId uint32, body []byte) er
 	//log.Printf("write: %v %d %s", data[0:8], len(zipData), string(body[0:min(len(body), 100)]))
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	err := c.conn.WriteMessage(websocket.BinaryMessage, data)
+	err := c.conn.WriteMessage(websocket.BinaryMessage, utils.GzipEncode(data))
 	if err != nil {
 		return err
 	}

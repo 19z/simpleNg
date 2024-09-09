@@ -153,6 +153,7 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Handle incoming messages from the client
 	for {
 		_, message, err := conn.ReadMessage()
+		message = utils.GzipDecode(message)
 		if err != nil {
 			log.Printf("Failed to read message: %v", err)
 			if oldConn, ok := s.conns[host]; ok {
@@ -182,7 +183,7 @@ func (s *Server) CopyRequest(requestId uint32, conn *connection, req *http.Reque
 	binary.LittleEndian.PutUint32(prefix[4:], requestId)
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
-	err = conn.conn.WriteMessage(websocket.BinaryMessage, append(prefix, requestBuf.Bytes()...))
+	err = conn.conn.WriteMessage(websocket.BinaryMessage, utils.GzipEncode(append(prefix, requestBuf.Bytes()...)))
 	if err != nil {
 		return err
 	}
