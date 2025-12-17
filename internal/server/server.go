@@ -77,7 +77,13 @@ func (s *Server) HandleRequest(w http.ResponseWriter, r *http.Request) {
 	host := r.Host
 	// is websocket request?
 	if websocket.IsWebSocketUpgrade(r) {
-		s.HandleWebSocket(w, r)
+		// 检查是否是内部协议连接（使用特定路径标识）
+		if r.URL.Path == "/__simpleNg_internal__" {
+			s.HandleWebSocket(w, r)
+			return
+		}
+		// 普通 WebSocket 请求，需要转发
+		s.HandleWebSocketForward(w, r)
 		return
 	}
 
@@ -124,6 +130,17 @@ func (s *Server) HandleRequest(w http.ResponseWriter, r *http.Request) {
 var socketMessages = make(chan []byte, 1024)   // 用于接收来自客户端的请求结果消息
 var closedHosts = make(chan *connection, 1024) // 用于通知客户端连接已关闭
 
+// WebSocket 转发相关的上下文
+type websocketForwardContext struct {
+	requestId   uint32
+	conn        *connection
+	clientConn  *websocket.Conn
+	closeSignal chan bool
+}
+
+var websocketForwardContexts = sync.Map{}              // map[uint32]*websocketForwardContext
+var websocketForwardMessages = make(chan []byte, 1024) // 用于接收来自客户端的 WebSocket 转发消息
+
 func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	upgrader := websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
@@ -153,7 +170,6 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Handle incoming messages from the client
 	for {
 		_, message, err := conn.ReadMessage()
-		message = utils.GzipDecode(message)
 		if err != nil {
 			log.Printf("Failed to read message: %v", err)
 			if oldConn, ok := s.conns[host]; ok {
@@ -165,8 +181,86 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 			break
 		}
+		message = utils.GzipDecode(message)
 		log.Printf("Received message from client: %v %d %s", message[0:8], len(message), string(message[8:100]))
 		socketMessages <- message
+	}
+}
+
+// HandleWebSocketForward 处理需要转发的普通 WebSocket 请求
+func (s *Server) HandleWebSocketForward(w http.ResponseWriter, r *http.Request) {
+	host := r.Host
+	conn, err := s.getConnectWithDomain(host, 10)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	// 升级到 WebSocket
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+	}
+
+	clientConn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("Failed to upgrade WebSocket connection: %v", err)
+		return
+	}
+
+	requestId := utils.GetNextRequestId()
+	ctx := &websocketForwardContext{
+		requestId:   requestId,
+		conn:        conn,
+		clientConn:  clientConn,
+		closeSignal: make(chan bool),
+	}
+	websocketForwardContexts.Store(requestId, ctx)
+
+	log.Printf("WebSocket forward connection established for host: %s, requestId: %d", host, requestId)
+
+	// 转发 WebSocket 升级请求到客户端
+	err = s.CopyWebSocketRequest(requestId, conn, r)
+	if err != nil {
+		log.Printf("Failed to forward WebSocket request: %v", err)
+		_ = clientConn.Close()
+		websocketForwardContexts.Delete(requestId)
+		return
+	}
+
+	// 从客户端 WebSocket 读取数据并转发到内部连接
+	go func() {
+		defer func() {
+			_ = clientConn.Close()
+			websocketForwardContexts.Delete(requestId)
+		}()
+
+		for {
+			messageType, message, err := clientConn.ReadMessage()
+			if err != nil {
+				log.Printf("Failed to read from client WebSocket: %v", err)
+				// 通知客户端关闭连接
+				_ = s.CopyWebSocketData(requestId, conn, messageType, nil, true)
+				break
+			}
+			// 转发数据到客户端
+			err = s.CopyWebSocketData(requestId, conn, messageType, message, false)
+			if err != nil {
+				log.Printf("Failed to forward WebSocket data: %v", err)
+				break
+			}
+		}
+	}()
+
+	// 等待关闭信号
+	select {
+	case <-ctx.closeSignal:
+		log.Printf("WebSocket forward connection closed for requestId: %d", requestId)
+		_ = clientConn.Close()
+	case <-time.After(time.Minute * 10):
+		log.Printf("WebSocket forward connection timeout for requestId: %d", requestId)
+		_ = clientConn.Close()
 	}
 }
 
@@ -184,6 +278,49 @@ func (s *Server) CopyRequest(requestId uint32, conn *connection, req *http.Reque
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 	err = conn.conn.WriteMessage(websocket.BinaryMessage, utils.GzipEncode(append(prefix, requestBuf.Bytes()...)))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// CopyWebSocketRequest 转发 WebSocket 升级请求到客户端
+func (s *Server) CopyWebSocketRequest(requestId uint32, conn *connection, req *http.Request) error {
+	var requestBuf bytes.Buffer
+	err := req.Write(&requestBuf)
+	if err != nil {
+		return err
+	}
+	// 使用 0xff000010 作为 WebSocket 请求的前缀
+	prefix := []byte{0xff, 0x00, 0x00, 0x10}
+	prefix = append(prefix, make([]byte, 4)...)
+	binary.BigEndian.PutUint32(prefix[4:], requestId)
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	err = conn.conn.WriteMessage(websocket.BinaryMessage, utils.GzipEncode(append(prefix, requestBuf.Bytes()...)))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// CopyWebSocketData 转发 WebSocket 数据到客户端
+func (s *Server) CopyWebSocketData(requestId uint32, conn *connection, messageType int, data []byte, isClose bool) error {
+	// 构建消息：前缀(4字节) + requestId(4字节) + messageType(4字节) + 数据
+	msg := make([]byte, 12)
+	if isClose {
+		binary.BigEndian.PutUint32(msg, 0xff000011) // WebSocket 关闭
+	} else {
+		binary.BigEndian.PutUint32(msg, 0xff000010) // WebSocket 数据
+	}
+	binary.BigEndian.PutUint32(msg[4:], requestId)
+	binary.BigEndian.PutUint32(msg[8:], uint32(messageType))
+	if data != nil {
+		msg = append(msg, data...)
+	}
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	err := conn.conn.WriteMessage(websocket.BinaryMessage, utils.GzipEncode(msg))
 	if err != nil {
 		return err
 	}
@@ -211,6 +348,39 @@ func (s *Server) MessageHandler() {
 				log.Printf("Failed to parse message: %v", err)
 				continue
 			}
+
+			// 检查是否是 WebSocket 转发消息
+			if prefix == 0xff000010 || prefix == 0xff000011 {
+				_wsCtx, ok := websocketForwardContexts.Load(requestId)
+				if !ok {
+					log.Printf("Failed to find WebSocket forward context for requestId: %d", requestId)
+					continue
+				}
+				wsCtx := _wsCtx.(*websocketForwardContext)
+
+				if prefix == 0xff000011 {
+					// WebSocket 关闭
+					_ = wsCtx.clientConn.Close()
+					wsCtx.closeSignal <- true
+					websocketForwardContexts.Delete(requestId)
+				} else {
+					// WebSocket 数据转发
+					if len(body) >= 4 {
+						messageType := int(binary.BigEndian.Uint32(body[:4]))
+						data := body[4:]
+						err := wsCtx.clientConn.WriteMessage(messageType, data)
+						if err != nil {
+							log.Printf("Failed to write WebSocket message: %v", err)
+							_ = wsCtx.clientConn.Close()
+							wsCtx.closeSignal <- true
+							websocketForwardContexts.Delete(requestId)
+						}
+					}
+				}
+				continue
+			}
+
+			// 处理普通 HTTP 请求响应
 			_ctx, ok := serverRequestContexts.Load(requestId)
 			if !ok {
 				log.Printf("Failed to find request context for requestId: %d", requestId)

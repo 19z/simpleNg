@@ -8,7 +8,6 @@
 
 你可以在服务端前置 Nginx 来与你的服务器上的其他服务共享 http / https 端口。同时你也可以借助 Let's Encrypt 等免费的域名证书来提供 https 服务。
 
-目前只支持转发本地 http 服务到公网，不支持转发 websocket 服务。因为服务端和客户端之间使用 websocket 来建立连接转发请求。
 
 ```mermaid
 graph TD

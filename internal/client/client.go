@@ -2,6 +2,7 @@ package client
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/tls"
 	"encoding/binary"
 	"io"
@@ -18,10 +19,17 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type websocketForwardContext struct {
+	requestId   uint32
+	localConn   *websocket.Conn
+	closeSignal chan bool
+}
+
 type Client struct {
-	config *config.ClientConfig
-	conn   *websocket.Conn
-	mu     sync.Mutex
+	config            *config.ClientConfig
+	conn              *websocket.Conn
+	mu                sync.Mutex
+	wsForwardContexts sync.Map // map[uint32]*websocketForwardContext
 }
 
 func NewClient(cfg *config.ClientConfig) (*Client, error) {
@@ -46,8 +54,12 @@ func (c *Client) connect() error {
 	var url string
 	var err error
 	var conn *websocket.Conn
+
+	// 构建内部协议连接 URL（使用特定路径标识）
+	internalPath := "/__simpleNg_internal__"
+
 	if strings.HasPrefix(c.config.Domain, "ws://") || strings.HasPrefix(c.config.Domain, "wss://") {
-		url = c.config.Domain
+		url = c.config.Domain + internalPath
 		conn, _, err = dialer.Dial(url, nil)
 		if err != nil {
 			return err
@@ -55,7 +67,7 @@ func (c *Client) connect() error {
 		c.conn = conn
 	} else {
 		for _, protocol := range []string{"wss://", "ws://"} {
-			url = protocol + c.config.Domain
+			url = protocol + c.config.Domain + internalPath
 			conn, _, err = dialer.Dial(url, nil)
 			if err == nil {
 				c.conn = conn
@@ -75,12 +87,54 @@ func (c *Client) MessageHandler() error {
 		if err != nil {
 			return err
 		}
+		data = utils.GzipDecode(data)
+		// 检查是否是 WebSocket 转发数据
+		if len(data) >= 8 {
+			prefix := binary.BigEndian.Uint32(data[:4])
+			requestId := binary.BigEndian.Uint32(data[4:8])
+			if prefix == 0xff000010 || prefix == 0xff000011 {
+				// WebSocket 转发数据或关闭
+				_wsCtx, ok := c.wsForwardContexts.Load(requestId)
+				if ok {
+					wsCtx := _wsCtx.(*websocketForwardContext)
+					if prefix == 0xff000011 {
+						// WebSocket 关闭
+						_ = wsCtx.localConn.Close()
+						wsCtx.closeSignal <- true
+						c.wsForwardContexts.Delete(requestId)
+					} else if len(data) >= 12 {
+						// WebSocket 数据
+						messageType := int(binary.BigEndian.Uint32(data[8:12]))
+						messageData := data[12:]
+						err := wsCtx.localConn.WriteMessage(messageType, messageData)
+						if err != nil {
+							log.Printf("Failed to write to local WebSocket: %v", err)
+							_ = wsCtx.localConn.Close()
+							wsCtx.closeSignal <- true
+							c.wsForwardContexts.Delete(requestId)
+						}
+					}
+					continue
+				}
+			}
+		}
 		//go c.httpRequestToWebSocket(data)
-		go c.httpRequestToWebSocket2(utils.GzipDecode(data))
+		go c.httpRequestToWebSocket2(data)
 	}
 }
 
 func (c *Client) httpRequestToWebSocket2(data []byte) {
+	// 检查是否是 WebSocket 转发请求
+	if len(data) >= 4 {
+		prefix := binary.BigEndian.Uint32(data[:4])
+		if prefix == 0xff000010 {
+			// WebSocket 转发请求
+			c.handleWebSocketForward(data)
+			return
+		}
+	}
+
+	// 普通 HTTP 请求处理
 	// 创建 TCP 连接
 	requestId, requestData, err := utils.ResumeRequest3(data)
 	if err != nil {
@@ -184,6 +238,113 @@ func (c *Client) ClientResponse(requestId uint32, resp *http.Response) error {
 		}
 	}
 
+	return nil
+}
+
+func (c *Client) handleWebSocketForward(data []byte) {
+	// 解析请求：前缀(4字节) + requestId(4字节) + HTTP请求数据
+	if len(data) < 8 {
+		log.Println("Invalid WebSocket forward request: data too short")
+		return
+	}
+	requestId := binary.BigEndian.Uint32(data[4:8])
+	requestData := data[8:]
+
+	// 解析 HTTP 请求
+	req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(requestData)))
+	if err != nil {
+		log.Printf("Failed to parse WebSocket request: %v", err)
+		_ = c.WriteToConnect(0xff000011, requestId, []byte(err.Error()))
+		return
+	}
+
+	// 构建本地 WebSocket URL
+	var localURL string
+	if strings.HasPrefix(c.config.Local, "http://") {
+		localURL = strings.Replace(c.config.Local, "http://", "ws://", 1)
+	} else if strings.HasPrefix(c.config.Local, "https://") {
+		localURL = strings.Replace(c.config.Local, "https://", "wss://", 1)
+	} else {
+		// 默认使用 ws://
+		localURL = "ws://" + c.config.Local
+	}
+	localURL += req.URL.Path
+	if req.URL.RawQuery != "" {
+		localURL += "?" + req.URL.RawQuery
+	}
+
+	// 建立到本地服务的 WebSocket 连接
+	dialer := websocket.Dialer{
+		HandshakeTimeout: 5 * time.Second,
+	}
+	localConn, _, err := dialer.Dial(localURL, req.Header)
+	if err != nil {
+		log.Printf("Failed to connect to local WebSocket: %v", err)
+		_ = c.WriteToConnect(0xff000011, requestId, []byte(err.Error()))
+		return
+	}
+
+	log.Printf("WebSocket forward connection established for requestId: %d", requestId)
+
+	// 创建转发上下文
+	wsCtx := &websocketForwardContext{
+		requestId:   requestId,
+		localConn:   localConn,
+		closeSignal: make(chan bool),
+	}
+	c.wsForwardContexts.Store(requestId, wsCtx)
+
+	// 从本地 WebSocket 读取数据并转发到服务端
+	go func() {
+		defer func() {
+			_ = localConn.Close()
+			c.wsForwardContexts.Delete(requestId)
+			_ = c.WriteToConnect(0xff000011, requestId, nil)
+		}()
+
+		for {
+			messageType, message, err := localConn.ReadMessage()
+			if err != nil {
+				log.Printf("Failed to read from local WebSocket: %v", err)
+				wsCtx.closeSignal <- true
+				break
+			}
+			// 转发数据到服务端
+			err = c.WriteWebSocketData(requestId, messageType, message)
+			if err != nil {
+				log.Printf("Failed to forward WebSocket data: %v", err)
+				wsCtx.closeSignal <- true
+				break
+			}
+		}
+	}()
+
+	// 等待关闭信号
+	select {
+	case <-wsCtx.closeSignal:
+		log.Printf("WebSocket forward connection closed for requestId: %d", requestId)
+	case <-time.After(time.Minute * 10):
+		log.Printf("WebSocket forward connection timeout for requestId: %d", requestId)
+		_ = localConn.Close()
+		c.wsForwardContexts.Delete(requestId)
+	}
+}
+
+func (c *Client) WriteWebSocketData(requestId uint32, messageType int, data []byte) error {
+	// 构建消息：前缀(4字节) + requestId(4字节) + messageType(4字节) + 数据
+	msg := make([]byte, 12)
+	binary.BigEndian.PutUint32(msg, 0xff000010) // WebSocket 数据
+	binary.BigEndian.PutUint32(msg[4:], requestId)
+	binary.BigEndian.PutUint32(msg[8:], uint32(messageType))
+	if data != nil {
+		msg = append(msg, data...)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	err := c.conn.WriteMessage(websocket.BinaryMessage, utils.GzipEncode(msg))
+	if err != nil {
+		return err
+	}
 	return nil
 }
 

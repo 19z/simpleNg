@@ -8,7 +8,6 @@ You will need a server with a public network environment and a wildcard domain n
 
 You can place Nginx in front of the server to share the HTTP/HTTPS ports with other services on your server. Additionally, you can use free domain certificates from services like Let's Encrypt to provide HTTPS services.
 
-Currently, it only supports forwarding local HTTP services to the public internet and does not support forwarding WebSocket services. This is because the connection between the server and client is established using WebSocket to forward requests.
 
 ```mermaid
 graph TD
