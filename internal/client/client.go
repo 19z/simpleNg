@@ -274,10 +274,21 @@ func (c *Client) handleWebSocketForward(data []byte) {
 	}
 
 	// 建立到本地服务的 WebSocket 连接
+	// 创建一个新的Header，避免重复的WebSocket握手头部
+	header := make(http.Header)
+	for k, vv := range req.Header {
+		// 跳过WebSocket握手相关的头部，让Dialer重新生成
+		if k != "Sec-Websocket-Key" && k != "Sec-Websocket-Version" && k != "Sec-Websocket-Extensions" && k != "Upgrade" && k != "Connection" {
+			for _, v := range vv {
+				header.Add(k, v)
+			}
+		}
+	}
+
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 5 * time.Second,
 	}
-	localConn, _, err := dialer.Dial(localURL, req.Header)
+	localConn, _, err := dialer.Dial(localURL, header)
 	if err != nil {
 		log.Printf("Failed to connect to local WebSocket: %v", err)
 		_ = c.WriteToConnect(0xff000011, requestId, []byte(err.Error()))
