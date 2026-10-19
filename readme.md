@@ -99,5 +99,15 @@ A newer client takes over the domain. The older client receives close code `4001
 
 Next, from any location, you can access `http(s)://testprefix.simple-ng.example.com` to reach the HTTP service at `127.0.0.1:8080` on your intranet machine.
 
+You can also publish a directory as a static site without a separate HTTP server:
+
+```sh
+simpleNg --domain some.example.com --local file:///C:/Document/example/
+# Linux / macOS
+simpleNg --domain some.example.com --local file:///home/user/example/
+```
+
+Use an absolute `file:///` URL pointing to an existing directory. Quote the argument when it contains spaces and percent-encode URL characters such as `#` and `%`. Directory requests prefer `index.html`, then `index.htm`; otherwise a directory listing is displayed. Static assets, HEAD, Range, and conditional requests are supported. Files and symlink targets outside the published directory cannot be accessed.
+
 For data security reasons, this project does not provide a demo server.
 

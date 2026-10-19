@@ -97,4 +97,14 @@ server {
 
 接下来在任意位置，访问 `http(s)://testprefix.simple-ng.example.com` 即可访问到你内网机器中 `127.0.0.1:8080` 的 http 服务。
 
+也可以直接将本地目录作为静态站点，无需额外运行 HTTP 服务：
+
+```sh
+simpleNg --domain some.example.com --local file:///C:/Document/example/
+# Linux / macOS
+simpleNg --domain some.example.com --local file:///home/user/example/
+```
+
+目录必须存在，使用绝对 `file:///` URL。路径含空格时可为整个参数加引号，`#`、`%` 等 URL 特殊字符需要百分号编码。访问目录时优先使用 `index.html`，不存在时使用 `index.htm`；均不存在时显示目录列表。支持静态资源、HEAD、Range 与条件请求，目录外的文件和符号链接目标不能访问。
+
 因保护数据安全，本项目不提供演示服务器。

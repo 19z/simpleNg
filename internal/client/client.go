@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ type Client struct {
 	config  *config.ClientConfig
 	session *yamux.Session
 	wire    *tunnel.Conn
+	files   http.Handler
 }
 
 // ErrTakenOver distinguishes domain replacement from a retryable disconnect.
@@ -32,6 +34,14 @@ func NewClient(cfg *config.ClientConfig) (*Client, error) {
 }
 
 func newClient(ctx context.Context, cfg *config.ClientConfig) (*Client, error) {
+	var files http.Handler
+	var err error
+	if strings.HasPrefix(strings.ToLower(cfg.Local), "file:") {
+		files, err = NewDirectoryHandler(cfg.Local)
+		if err != nil {
+			return nil, err
+		}
+	}
 	dialer := websocket.Dialer{
 		HandshakeTimeout:  5 * time.Second,
 		Subprotocols:      []string{tunnel.Subprotocol},
@@ -82,7 +92,7 @@ func newClient(ctx context.Context, cfg *config.ClientConfig) (*Client, error) {
 			conn.Close()
 			return nil, err
 		}
-		return &Client{config: cfg, session: session, wire: wire}, nil
+		return &Client{config: cfg, session: session, wire: wire, files: files}, nil
 	}
 	return nil, lastErr
 }
@@ -96,22 +106,44 @@ func (c *Client) MessageHandler() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	defer c.Close()
+	if c.files != nil {
+		server := &http.Server{Handler: c.files, ReadHeaderTimeout: 10 * time.Second}
+		defer server.Close()
+		err := server.Serve(&directoryListener{Session: c.session, addr: c.wire.LocalAddr()})
+		return c.connectionError(err)
+	}
 	for {
 		stream, err := c.session.AcceptStream()
 		if err != nil {
-			code, _ := c.wire.CloseReason()
-			if code == tunnel.CloseCodeTakenOver {
-				return ErrTakenOver
-			}
-			return err
+			return c.connectionError(err)
 		}
 		go c.forward(ctx, stream)
 	}
 }
 
+type directoryListener struct {
+	*yamux.Session
+	addr net.Addr
+}
+
+func (l *directoryListener) Addr() net.Addr { return l.addr }
+
+func (c *Client) connectionError(err error) error {
+	code, _ := c.wire.CloseReason()
+	if code == tunnel.CloseCodeTakenOver {
+		return ErrTakenOver
+	}
+	return err
+}
+
 // RunWithReconnect retries network failures with capped exponential backoff.
 // A takeover is terminal: retrying it would evict the newer domain owner.
 func RunWithReconnect(ctx context.Context, cfg *config.ClientConfig) error {
+	if strings.HasPrefix(strings.ToLower(cfg.Local), "file:") {
+		if _, err := NewDirectoryHandler(cfg.Local); err != nil {
+			return err
+		}
+	}
 	backoff := time.Second
 	const maxBackoff = 30 * time.Second
 	for {
