@@ -36,10 +36,12 @@ func GetNextRequestId() uint32 {
 // ParseMessage 解析消息
 // 解析消息中的前缀，requestId，以及正文
 // prefix 为 0xff000002 数据块，0xff000003 为正文结束，0xff000004 为连接失败
+// 0xff000010 为 WebSocket 数据转发，0xff000011 为 WebSocket 连接关闭
 func ParseMessage(message []byte) (prefix uint32, requestId uint32, body []byte, err error) {
 	// 解析前缀
 	prefix = binary.BigEndian.Uint32(message)
-	if prefix != 0xff000002 && prefix != 0xff000003 && prefix != 0xff000004 {
+	if prefix != 0xff000002 && prefix != 0xff000003 && prefix != 0xff000004 &&
+		prefix != 0xff000010 && prefix != 0xff000011 {
 		err = fmt.Errorf("Invalid message prefix: %d", prefix)
 		return
 	}

@@ -19,6 +19,12 @@ import (
 	"github.com/hashicorp/yamux"
 )
 
+type websocketForwardContext struct {
+	requestId   uint32
+	localConn   *websocket.Conn
+	closeSignal chan bool
+}
+
 type Client struct {
 	config  *config.ClientConfig
 	session *yamux.Session
