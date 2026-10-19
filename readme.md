@@ -95,6 +95,8 @@ The following example assumes you want to expose the local HTTP service at `127.
 
 Note that on the same server, different clients must have different `domain` values; otherwise, the older client will be kicked offline.
 
+A newer client takes over the domain. The older client receives close code `4001` (domain taken over) and stops without reconnecting. Network failures and temporary server unavailability retry after 1, 2, 4, 8, 16, then 30 seconds, capped at 30 seconds; a connection stable for one minute resets the backoff. Ctrl+C stops the client and any pending retry.
+
 Next, from any location, you can access `http(s)://testprefix.simple-ng.example.com` to reach the HTTP service at `127.0.0.1:8080` on your intranet machine.
 
 For data security reasons, this project does not provide a demo server.

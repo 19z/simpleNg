@@ -20,6 +20,7 @@ import (
 
 type connection struct {
 	session   *yamux.Session
+	wire      *tunnel.Conn
 	proxy     *httputil.ReverseProxy
 	transport *http.Transport
 }
@@ -97,7 +98,7 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		IdleConnTimeout:    90 * time.Second,
 	}
 	defer transport.CloseIdleConnections()
-	conn := &connection{session: session, transport: transport}
+	conn := &connection{session: session, wire: wire, transport: transport}
 	conn.proxy = &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.URL.Scheme = "http"
@@ -122,6 +123,14 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// The client returns from NewClient only after registration is visible.
 	ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	err = ws.WriteMessage(websocket.BinaryMessage, []byte(tunnel.Ready))
+	if err != nil {
+		// A failed registration must not evict a working domain owner.
+		if oldConn != nil && !oldConn.session.IsClosed() {
+			s.conns[host] = oldConn
+		} else {
+			delete(s.conns, host)
+		}
+	}
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
@@ -130,13 +139,15 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.Unlock()
 	}()
+	if err != nil {
+		return
+	}
 	if oldConn != nil {
+		if err := oldConn.wire.WriteClose(tunnel.CloseCodeTakenOver, tunnel.CloseReasonTakenOver); err != nil {
+			log.Printf("Failed to notify replaced tunnel for %s: %v", host, err)
+		}
 		oldConn.session.Close()
 		oldConn.transport.CloseIdleConnections()
-	}
-	if err != nil {
-		session.Close()
-		return
 	}
 	log.Printf("Tunnel established for host: %s", host)
 	<-session.CloseChan()

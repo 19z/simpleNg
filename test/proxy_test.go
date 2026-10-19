@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -472,4 +473,91 @@ func TestDomainsRemainIndependent(t *testing.T) {
 	if err != nil || string(got) != "original" {
 		t.Fatalf("disconnect affected other domain: %q, %v", got, err)
 	}
+}
+
+func waitForBody(t *testing.T, proxy *proxyFixture, expected string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := proxy.http.Get(proxy.url)
+		if err == nil {
+			body, readErr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if readErr == nil && resp.StatusCode == http.StatusOK && string(body) == expected {
+				return
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for proxied body %q", expected)
+}
+
+func TestNetworkDisconnectReconnectsToReplacementServer(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "reconnected") }))
+	defer upstream.Close()
+	first, _ := server.NewServer(&config.ServerConfig{})
+	second, _ := server.NewServer(&config.ServerConfig{})
+	var current atomic.Pointer[server.Server]
+	current.Store(first)
+	public := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		current.Load().HandleRequest(w, r)
+	}))
+	defer public.Close()
+	defer first.Close()
+	defer second.Close()
+	proxy := &proxyFixture{
+		url:  public.URL,
+		http: &http.Client{Transport: &http.Transport{}, Timeout: 5 * time.Second},
+	}
+	defer proxy.http.Transport.(*http.Transport).CloseIdleConnections()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	finished := make(chan error, 1)
+	go func() {
+		finished <- client.RunWithReconnect(ctx, &config.ClientConfig{
+			Domain: "ws" + strings.TrimPrefix(public.URL, "http"),
+			Local:  strings.TrimPrefix(upstream.URL, "http://"),
+		})
+	}()
+	waitForBody(t, proxy, "reconnected")
+	current.Store(second)
+	first.Close()
+	waitForBody(t, proxy, "reconnected")
+	cancel()
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("reconnecting client did not stop after cancellation")
+	}
+}
+
+func TestTakenOverClientStopsReconnecting(t *testing.T) {
+	proxy := newProxy(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "old client") }))
+	oldUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "retrying client") }))
+	defer oldUpstream.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	finished := make(chan error, 1)
+	go func() {
+		finished <- client.RunWithReconnect(ctx, &config.ClientConfig{
+			Domain: "ws" + strings.TrimPrefix(proxy.url, "http"),
+			Local:  strings.TrimPrefix(oldUpstream.URL, "http://"),
+		})
+	}()
+	waitForBody(t, proxy, "retrying client")
+	newUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "new client") }))
+	defer newUpstream.Close()
+	startClient(t, proxy.url, strings.TrimPrefix(newUpstream.URL, "http://"))
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatalf("taken over client returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("taken over client did not stop")
+	}
+	waitForBody(t, proxy, "new client")
 }

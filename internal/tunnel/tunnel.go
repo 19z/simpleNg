@@ -16,17 +16,56 @@ import (
 const Subprotocol = "simple-ng-tunnel-v1"
 const Ready = "simple-ng-ready"
 const Path = "/__simple_ng_internal__/tunnel/v1"
+const CloseCodeTakenOver = 4001
+const CloseReasonTakenOver = "domain taken over by another client"
 
 // Conn adapts binary WebSocket messages to yamux's ordered byte stream.
 // WebSocket control messages continue to be handled by gorilla/websocket.
 type Conn struct {
-	ws      *websocket.Conn
-	reader  io.Reader
-	writeMu sync.Mutex
+	ws            *websocket.Conn
+	reader        io.Reader
+	writeMu       sync.Mutex
+	closeReasonMu sync.RWMutex
+	closeCode     int
+	closeReason   string
+	closeReceived chan struct{}
+	closeOnce     sync.Once
 }
 
 func NewConn(ws *websocket.Conn) *Conn {
-	return &Conn{ws: ws}
+	conn := &Conn{ws: ws, closeReceived: make(chan struct{})}
+	ws.SetCloseHandler(func(code int, reason string) error {
+		conn.closeReasonMu.Lock()
+		conn.closeCode = code
+		conn.closeReason = reason
+		conn.closeReasonMu.Unlock()
+		conn.closeOnce.Do(func() { close(conn.closeReceived) })
+		return ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, ""), time.Now().Add(time.Second))
+	})
+	return conn
+}
+
+func (c *Conn) CloseReason() (int, string) {
+	c.closeReasonMu.RLock()
+	defer c.closeReasonMu.RUnlock()
+	return c.closeCode, c.closeReason
+}
+
+// WriteClose sends a reason before the owner closes the transport. Wait briefly
+// for the peer's close reply, keeping yamux writes from racing the handshake.
+func (c *Conn) WriteClose(code int, reason string) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if err := c.ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, reason), time.Now().Add(2*time.Second)); err != nil {
+		return err
+	}
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	select {
+	case <-c.closeReceived:
+	case <-timer.C:
+	}
+	return nil
 }
 
 func (c *Conn) Read(p []byte) (int, error) {

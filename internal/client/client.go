@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -20,9 +21,17 @@ import (
 type Client struct {
 	config  *config.ClientConfig
 	session *yamux.Session
+	wire    *tunnel.Conn
 }
 
+// ErrTakenOver distinguishes domain replacement from a retryable disconnect.
+var ErrTakenOver = errors.New("tunnel was taken over by another client")
+
 func NewClient(cfg *config.ClientConfig) (*Client, error) {
+	return newClient(context.Background(), cfg)
+}
+
+func newClient(ctx context.Context, cfg *config.ClientConfig) (*Client, error) {
 	dialer := websocket.Dialer{
 		HandshakeTimeout:  5 * time.Second,
 		Subprotocols:      []string{tunnel.Subprotocol},
@@ -39,14 +48,19 @@ func NewClient(cfg *config.ClientConfig) (*Client, error) {
 			return nil, err
 		}
 		target.Path, target.RawPath, target.RawQuery, target.Fragment = tunnel.Path, "", "", ""
-		conn, resp, err := dialer.Dial(target.String(), nil)
+		conn, resp, err := dialer.DialContext(ctx, target.String(), nil)
 		if resp != nil && resp.Body != nil {
 			resp.Body.Close()
 		}
 		if err != nil {
 			lastErr = err
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			continue
 		}
+		stop := context.AfterFunc(ctx, func() { conn.Close() })
+		defer stop()
 		if conn.Subprotocol() != tunnel.Subprotocol {
 			conn.Close()
 			return nil, fmt.Errorf("server does not support %s; upgrade both server and client", tunnel.Subprotocol)
@@ -62,12 +76,13 @@ func NewClient(cfg *config.ClientConfig) (*Client, error) {
 			conn.Close()
 			return nil, fmt.Errorf("invalid tunnel registration response")
 		}
-		session, err := yamux.Server(tunnel.NewConn(conn), tunnel.Config())
+		wire := tunnel.NewConn(conn)
+		session, err := yamux.Server(wire, tunnel.Config())
 		if err != nil {
 			conn.Close()
 			return nil, err
 		}
-		return &Client{config: cfg, session: session}, nil
+		return &Client{config: cfg, session: session, wire: wire}, nil
 	}
 	return nil, lastErr
 }
@@ -84,9 +99,62 @@ func (c *Client) MessageHandler() error {
 	for {
 		stream, err := c.session.AcceptStream()
 		if err != nil {
+			code, _ := c.wire.CloseReason()
+			if code == tunnel.CloseCodeTakenOver {
+				return ErrTakenOver
+			}
 			return err
 		}
 		go c.forward(ctx, stream)
+	}
+}
+
+// RunWithReconnect retries network failures with capped exponential backoff.
+// A takeover is terminal: retrying it would evict the newer domain owner.
+func RunWithReconnect(ctx context.Context, cfg *config.ClientConfig) error {
+	backoff := time.Second
+	const maxBackoff = 30 * time.Second
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil
+		}
+		conn, err := newClient(ctx, cfg)
+		if err == nil {
+			started := time.Now()
+			log.Printf("Client connected to %s", cfg.Domain)
+			done := make(chan error, 1)
+			go func() { done <- conn.MessageHandler() }()
+			select {
+			case err = <-done:
+			case <-ctx.Done():
+				conn.Close()
+				<-done
+				return nil
+			}
+			conn.Close()
+			if errors.Is(err, ErrTakenOver) {
+				log.Printf("Client for %s was taken over by another client; stopping", cfg.Domain)
+				return nil
+			}
+			if time.Since(started) >= time.Minute {
+				backoff = time.Second
+			}
+		}
+		if ctx.Err() != nil {
+			return nil
+		}
+		log.Printf("Tunnel to %s disconnected: %v; reconnecting in %s", cfg.Domain, err, backoff)
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil
+		case <-timer.C:
+		}
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
 	}
 }
 

@@ -1,13 +1,18 @@
 package client
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
+	"os"
+	"os/signal"
+	"strconv"
+	"syscall"
+
 	"simpleNg/internal/client"
 	"simpleNg/pkg/config"
 	"simpleNg/pkg/logger"
-	"strconv"
 )
 
 func Run(local string, domain string) error {
@@ -35,16 +40,8 @@ func Run(local string, domain string) error {
 		Local:  net.JoinHostPort(host, portNumStr),
 		Domain: domain,
 	}
-	clientInstance, err := client.NewClient(cfg)
-	if err != nil {
-		return err
-	}
-
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	log.Printf("Client started, connecting to %s", domain)
-
-	err = clientInstance.MessageHandler()
-	if err != nil {
-		return err
-	}
-	return nil
+	return client.RunWithReconnect(ctx, cfg)
 }
