@@ -8,7 +8,9 @@ You will need a server with a public network environment and a wildcard domain n
 
 You can place Nginx in front of the server to share the HTTP/HTTPS ports with other services on your server. Additionally, you can use free domain certificates from services like Let's Encrypt to provide HTTPS services.
 
-Currently, it only supports forwarding local HTTP services to the public internet and does not support forwarding WebSocket services. This is because the connection between the server and client is established using WebSocket to forward requests.
+Supports forwarding local HTTP and WebSocket services, including binary messages, subprotocols, compression, and control frames. Tunnel clients connect to the reserved `/__simple_ng_internal__/tunnel/v1` path; all other paths are forwarded to the local service. Business WebSockets cannot replace the tunnel. Domains without an online client return HTTP 404 immediately.
+
+This version changes the internal tunnel protocol. Upgrade both server and client together; command-line arguments remain the same. If Nginx routes by path, ensure the reserved path also forwards WebSocket Upgrade requests.
 
 ```mermaid
 graph TD

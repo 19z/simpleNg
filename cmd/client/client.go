@@ -27,12 +27,12 @@ func Run(local string, domain string) error {
 	if err != nil {
 		return fmt.Errorf("invalid port: %s", portNumStr)
 	}
-	if portNum < 1 || portNum > 65525 {
+	if portNum < 1 || portNum > 65535 {
 		return fmt.Errorf("invalid port: %d", portNum)
 	}
 
 	cfg := &config.ClientConfig{
-		Local:  local,
+		Local:  net.JoinHostPort(host, portNumStr),
 		Domain: domain,
 	}
 	clientInstance, err := client.NewClient(cfg)

@@ -24,7 +24,7 @@ func Run(port int) error {
 		return err
 	}
 
-	go serverInstance.MessageHandler()
+	defer serverInstance.Close()
 	http.HandleFunc("/", serverInstance.HandleRequest)
 	log.Printf("Server started, listening on port %d", cfg.Port)
 	return http.ListenAndServe(fmt.Sprintf(":%d", cfg.Port), nil)

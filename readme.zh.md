@@ -8,7 +8,9 @@
 
 你可以在服务端前置 Nginx 来与你的服务器上的其他服务共享 http / https 端口。同时你也可以借助 Let's Encrypt 等免费的域名证书来提供 https 服务。
 
-目前只支持转发本地 http 服务到公网，不支持转发 websocket 服务。因为服务端和客户端之间使用 websocket 来建立连接转发请求。
+支持转发本地 HTTP 和 WebSocket 服务，包括 WebSocket 二进制消息、子协议、压缩及控制帧。隧道客户端固定连接 `/__simple_ng_internal__/tunnel/v1`，其他路径均转发到本地服务，业务 WebSocket 不会替换隧道连接。域名没有在线客户端时立即返回 HTTP 404。
+
+此版本更新了内部隧道协议，服务端和客户端需要同时升级。命令行参数无需调整；如 Nginx 按路径配置代理，请确保上述内部路径也能转发 WebSocket Upgrade。
 
 ```mermaid
 graph TD
