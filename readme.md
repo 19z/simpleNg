@@ -111,3 +111,25 @@ Use an absolute `file:///` URL pointing to an existing directory. Quote the argu
 
 For data security reasons, this project does not provide a demo server.
 
+### WebSSH
+
+On Linux hosts with an SSH daemon listening on `127.0.0.1:22`, expose an SSH terminal with:
+
+```sh
+simpleNg --domain shell.example.com --local ssh:///home/admin/something
+```
+
+The browser prompts for the SSH username and password. The shell starts in the supplied directory. WebSSH is disabled on Windows and inside detected containers.
+
+### File collector
+
+Create an upload endpoint backed by an existing directory:
+
+```sh
+simpleNg --domain collect.example.com --local collect:///home/admin/uploads
+# Windows
+simpleNg --domain collect.example.com --local collect:///C:/Document/example/
+```
+
+Visitors can upload files and see the received-file list. Collected files are served as downloads only and are not rendered for direct viewing. Existing names are never overwritten; each upload is limited to 512 MiB. The bundled Vite/React interface is embedded in the executable under `/__simple_ng_internal__/tunnel/`.
+

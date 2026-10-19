@@ -4,7 +4,10 @@
 
 # Ignore all files in the dist directory
 dist/
+!internal/client/tunnelui/dist/
+!internal/client/tunnelui/dist/**
 
 # Ignore all files in the build directory
 build/
 .idea
+tunnelui/node_modules/

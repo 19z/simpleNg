@@ -19,7 +19,7 @@ func main() {
 	flag.IntVar(&port, "port", 8066, "Port to listen on (for server mode)")
 	flag.StringVar(&mode, "type", "client", "Mode to run in (server or client)")
 	flag.StringVar(&domain, "domain", "", "Domain to connect to (for client mode)")
-	flag.StringVar(&local, "local", "", "Local host:port or file:/// directory to expose (for client mode)")
+	flag.StringVar(&local, "local", "", "Local host:port, file:/// directory, collect:/// directory, or ssh:/// web terminal")
 
 	// 设置自定义的 Usage
 	flag.Usage = func() {
@@ -31,7 +31,7 @@ func main() {
 		_, _ = fmt.Fprintf(os.Stderr, "  -type string\n")
 		_, _ = fmt.Fprintf(os.Stderr, "     Mode to run in (server or client)\n")
 		_, _ = fmt.Fprintf(os.Stderr, "  -local string\n")
-		_, _ = fmt.Fprintf(os.Stderr, "     Local host:port or file:/// directory, like localhost:8080 or file:///C:/Document/example/\n")
+		_, _ = fmt.Fprintf(os.Stderr, "     Local host:port or file:/// directory, collect:/// upload directory, ssh:/// web terminal\n")
 		_, _ = fmt.Fprintf(os.Stderr, "\n")
 		_, _ = fmt.Fprintf(os.Stderr, "Examples:\n")
 		_, _ = fmt.Fprintf(os.Stderr, "  Run in server mode:\n")
@@ -39,6 +39,8 @@ func main() {
 		_, _ = fmt.Fprintf(os.Stderr, "  Run in client mode:\n")
 		_, _ = fmt.Fprintf(os.Stderr, "    %s -type=client -domain=testprefix.example.com:8066 -local=localhost:8080\n", os.Args[0])
 		_, _ = fmt.Fprintf(os.Stderr, "    %s --domain some.example.com --local file:///C:/Document/example/\n", os.Args[0])
+		_, _ = fmt.Fprintf(os.Stderr, "    %s --domain some.example.com --local collect:///C:/Document/example/\n", os.Args[0])
+		_, _ = fmt.Fprintf(os.Stderr, "    %s --domain some.example.com --local ssh:///home/admin/something\n", os.Args[0])
 		_, _ = fmt.Fprintf(os.Stderr, "\n")
 	}
 

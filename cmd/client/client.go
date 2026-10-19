@@ -21,8 +21,8 @@ func Run(local string, domain string) error {
 	if local == "" {
 		local = "127.0.0.1:8080"
 	}
-	if strings.HasPrefix(strings.ToLower(local), "file:") {
-		if _, err := client.NewDirectoryHandler(local); err != nil {
+	if strings.HasPrefix(strings.ToLower(local), "file:") || strings.HasPrefix(strings.ToLower(local), "collect:") || strings.HasPrefix(strings.ToLower(local), "ssh:") {
+		if _, err := client.NewLocalHandler(local); err != nil {
 			return err
 		}
 	} else {

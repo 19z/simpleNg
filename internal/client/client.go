@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"embed"
 	"errors"
 	"fmt"
 	"io"
@@ -32,6 +33,9 @@ type Client struct {
 	files   http.Handler
 }
 
+//go:embed all:tunnelui/dist
+var tunnelAssets embed.FS
+
 // ErrTakenOver distinguishes domain replacement from a retryable disconnect.
 var ErrTakenOver = errors.New("tunnel was taken over by another client")
 
@@ -42,8 +46,8 @@ func NewClient(cfg *config.ClientConfig) (*Client, error) {
 func newClient(ctx context.Context, cfg *config.ClientConfig) (*Client, error) {
 	var files http.Handler
 	var err error
-	if strings.HasPrefix(strings.ToLower(cfg.Local), "file:") {
-		files, err = NewDirectoryHandler(cfg.Local)
+	if isLocalPage(cfg.Local) {
+		files, err = NewLocalHandler(cfg.Local)
 		if err != nil {
 			return nil, err
 		}
@@ -145,8 +149,8 @@ func (c *Client) connectionError(err error) error {
 // RunWithReconnect retries network failures with capped exponential backoff.
 // A takeover is terminal: retrying it would evict the newer domain owner.
 func RunWithReconnect(ctx context.Context, cfg *config.ClientConfig) error {
-	if strings.HasPrefix(strings.ToLower(cfg.Local), "file:") {
-		if _, err := NewDirectoryHandler(cfg.Local); err != nil {
+	if isLocalPage(cfg.Local) {
+		if _, err := NewLocalHandler(cfg.Local); err != nil {
 			return err
 		}
 	}
