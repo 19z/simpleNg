@@ -50,5 +50,16 @@ func Run(local string, domain string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	log.Printf("Client started, connecting to %s", domain)
+	switch {
+	case strings.HasPrefix(strings.ToLower(local), "ssh:"):
+		log.Printf("Open http(s)://%s in a browser; enter the local SSH account name and password in the terminal", domain)
+		log.Printf("With --local=ssh://, the SSH shell starts in the authenticated account's home; press Ctrl+C to stop")
+	case strings.HasPrefix(strings.ToLower(local), "collect:"):
+		log.Printf("Open http(s)://%s in a browser to upload and download collected files", domain)
+	case strings.HasPrefix(strings.ToLower(local), "file:"):
+		log.Printf("Open http(s)://%s in a browser to view the published directory", domain)
+	default:
+		log.Printf("Open http(s)://%s in a browser to reach %s", domain, local)
+	}
 	return client.RunWithReconnect(ctx, cfg)
 }

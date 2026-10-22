@@ -5,6 +5,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -72,6 +73,24 @@ func TestLocalURLParsing(t *testing.T) {
 		if _, err := NewLocalHandler(value); err != nil {
 			t.Fatalf("relative URL %q: %v", value, err)
 		}
+	}
+	bareSSH, err := url.Parse("ssh://")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := localURLPath(bareSSH); err != nil || got != "" {
+		t.Fatalf("bare ssh URL path = %q, %v; want login user's default directory", got, err)
+	}
+	relativeSSH, err := url.Parse("ssh://./")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := localURLPath(relativeSSH); err != nil || got != cwd {
+		t.Fatalf("relative ssh URL path = %q, %v; want current directory %q", got, err, cwd)
 	}
 	if runtime.GOOS == "windows" {
 		if _, err := NewLocalHandler("ssh:///C:/tmp"); err == nil {

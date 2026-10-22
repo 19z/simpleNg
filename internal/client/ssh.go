@@ -41,7 +41,7 @@ func (h *sshHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if ws.ReadJSON(&login) != nil {
 		return
 	}
-	input := &terminalLogin{ws: ws}
+	input := &terminalLogin{ws: ws, cols: login.Columns, rows: login.Rows}
 	username, err := input.readLine("login: ", true)
 	if err != nil {
 		return
@@ -50,6 +50,7 @@ func (h *sshHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	login.Columns, login.Rows = input.cols, input.rows
 	config := &ssh.ClientConfig{User: username, Auth: []ssh.AuthMethod{ssh.Password(password)}, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 8 * time.Second}
 	conn, err := ssh.Dial("tcp", "127.0.0.1:22", config)
 	if err != nil {
@@ -85,12 +86,19 @@ func (h *sshHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	if err := session.Start("cd " + shellQuote(h.directory) + " && exec ${SHELL:-/bin/sh} -i"); err != nil {
+	shell := "exec ${SHELL:-/bin/sh} -i"
+	if h.directory != "" {
+		shell = "cd " + shellQuote(h.directory) + " && " + shell
+	}
+	if err := session.Start(shell); err != nil {
 		ws.WriteJSON(map[string]string{"type": "error", "message": "Could not start shell"})
 		return
 	}
 	if len(input.pending) > 0 {
 		_, _ = in.Write(input.pending)
+	}
+	if h.directory == "" {
+		_, _ = in.Write([]byte("cd; clear\n"))
 	}
 	var writeMu sync.Mutex
 	write := func(kind int, data []byte) error {
@@ -148,8 +156,9 @@ func (h *sshHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // Login input stays in the terminal; passwords are never echoed to the browser.
 type terminalLogin struct {
-	ws      *websocket.Conn
-	pending []byte
+	ws         *websocket.Conn
+	pending    []byte
+	cols, rows int
 }
 
 func (t *terminalLogin) readLine(prompt string, echo bool) (string, error) {
@@ -164,6 +173,13 @@ func (t *terminalLogin) readLine(prompt string, echo bool) (string, error) {
 				return "", err
 			}
 			if kind != websocket.BinaryMessage {
+				var size struct {
+					Type       string
+					Cols, Rows int
+				}
+				if json.Unmarshal(data, &size) == nil && size.Type == "resize" && size.Cols > 0 && size.Rows > 0 {
+					t.cols, t.rows = size.Cols, size.Rows
+				}
 				continue
 			}
 			t.pending = data

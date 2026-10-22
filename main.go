@@ -19,7 +19,7 @@ func main() {
 	flag.IntVar(&port, "port", 8066, "Port to listen on (for server mode)")
 	flag.StringVar(&mode, "type", "client", "Mode to run in (server or client)")
 	flag.StringVar(&domain, "domain", "", "Domain to connect to (for client mode)")
-	flag.StringVar(&local, "local", "", "Local host:port, file:/// directory, collect:/// directory, or ssh:/// web terminal")
+	flag.StringVar(&local, "local", "", "Local host:port, file:// directory, collect:// upload directory, or ssh:// terminal")
 
 	// 设置自定义的 Usage
 	flag.Usage = func() {
@@ -31,7 +31,11 @@ func main() {
 		_, _ = fmt.Fprintf(os.Stderr, "  -type string\n")
 		_, _ = fmt.Fprintf(os.Stderr, "     Mode to run in (server or client)\n")
 		_, _ = fmt.Fprintf(os.Stderr, "  -local string\n")
-		_, _ = fmt.Fprintf(os.Stderr, "     Local host:port or file:/// directory, collect:/// upload directory, ssh:/// web terminal\n")
+		_, _ = fmt.Fprintf(os.Stderr, "     Forward a local service or publish a directory, file collector, or SSH terminal\n")
+		_, _ = fmt.Fprintf(os.Stderr, "     file://./ serves the current directory; collect://./ stores uploads in it\n")
+		_, _ = fmt.Fprintf(os.Stderr, "     ssh:// uses the SSH login account's home; ssh://./ uses the current directory\n")
+		_, _ = fmt.Fprintf(os.Stderr, "     SSH requires Linux with sshd listening on 127.0.0.1:22\n")
+		_, _ = fmt.Fprintf(os.Stderr, "     Open the tunnel domain in a browser and enter your OS SSH username and password\n")
 		_, _ = fmt.Fprintf(os.Stderr, "\n")
 		_, _ = fmt.Fprintf(os.Stderr, "Examples:\n")
 		_, _ = fmt.Fprintf(os.Stderr, "  Run in server mode:\n")
@@ -41,6 +45,7 @@ func main() {
 		_, _ = fmt.Fprintf(os.Stderr, "    %s --domain some.example.com --local file:///C:/Document/example/\n", os.Args[0])
 		_, _ = fmt.Fprintf(os.Stderr, "    %s --domain some.example.com --local collect:///C:/Document/example/\n", os.Args[0])
 		_, _ = fmt.Fprintf(os.Stderr, "    %s --domain some.example.com --local ssh:///home/admin/something\n", os.Args[0])
+		_, _ = fmt.Fprintf(os.Stderr, "    %s --domain shell.example.com --local ssh://\n", os.Args[0])
 		_, _ = fmt.Fprintf(os.Stderr, "\n")
 	}
 

@@ -24,21 +24,9 @@ func NewLocalHandler(value string) (http.Handler, error) {
 	if err != nil || u.Opaque != "" || (u.Host != "" && u.Host != ".") || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.User != nil {
 		return nil, fmt.Errorf("local URL must contain an absolute path: %q", value)
 	}
-	root := filepath.FromSlash(u.Path)
-	if u.Host == "." {
-		root = filepath.FromSlash(strings.TrimPrefix(u.Path, "/"))
-	}
-	if root == "" {
-		root = "."
-	}
-	if runtime.GOOS == "windows" && len(root) > 2 && root[0] == '\\' && root[2] == ':' {
-		root = root[1:]
-	}
-	if !filepath.IsAbs(root) {
-		root, err = filepath.Abs(root)
-		if err != nil {
-			return nil, fmt.Errorf("could not resolve local URL path: %w", err)
-		}
+	root, err := localURLPath(u)
+	if err != nil {
+		return nil, err
 	}
 	switch strings.ToLower(u.Scheme) {
 	case "file":
@@ -49,9 +37,11 @@ func NewLocalHandler(value string) (http.Handler, error) {
 		if runtime.GOOS == "windows" {
 			return nil, fmt.Errorf("webssh is not supported on Windows")
 		}
-		info, err := os.Stat(root)
-		if err != nil || !info.IsDir() {
-			return nil, fmt.Errorf("webssh default path must be an existing directory: %s", root)
+		if root != "" {
+			info, err := os.Stat(root)
+			if err != nil || !info.IsDir() {
+				return nil, fmt.Errorf("webssh default path must be an existing directory: %s", root)
+			}
 		}
 		if err := checkSSHService(); err != nil {
 			return nil, err
@@ -60,6 +50,30 @@ func NewLocalHandler(value string) (http.Handler, error) {
 	default:
 		return nil, fmt.Errorf("unsupported local URL scheme %q", u.Scheme)
 	}
+}
+
+func localURLPath(u *url.URL) (string, error) {
+	root := filepath.FromSlash(u.Path)
+	if u.Host == "." {
+		root = filepath.FromSlash(strings.TrimPrefix(u.Path, "/"))
+	}
+	if strings.EqualFold(u.Scheme, "ssh") && u.Host == "" && u.Path == "" {
+		return "", nil
+	}
+	if root == "" {
+		root = "."
+	}
+	if runtime.GOOS == "windows" && len(root) > 2 && root[0] == '\\' && root[2] == ':' {
+		root = root[1:]
+	}
+	if !filepath.IsAbs(root) {
+		var err error
+		root, err = filepath.Abs(root)
+		if err != nil {
+			return "", fmt.Errorf("could not resolve local URL path: %w", err)
+		}
+	}
+	return root, nil
 }
 
 func checkSSHService() error {

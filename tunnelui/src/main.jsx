@@ -48,11 +48,12 @@ function WebSSH() {
     const fit = new FitAddon()
     term.loadAddon(fit)
     term.open(termRef.current)
-    fit.fit()
+    requestAnimationFrame(() => fit.fit())
     const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/ssh`)
     socket.binaryType = 'arraybuffer'
     let message = ''
-    socket.onopen = () => { setActive(true); socket.send(JSON.stringify({ cols: term.cols, rows: term.rows })); term.focus() }
+    const sendSize = () => { fit.fit(); if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows })) }
+    socket.onopen = () => { setActive(true); sendSize(); term.focus() }
     socket.onmessage = event => {
       if (typeof event.data === 'string') {
         try { message = JSON.parse(event.data).message || event.data } catch { message = event.data }
@@ -64,11 +65,11 @@ function WebSSH() {
     const data = term.onData(value => { if (socket.readyState === WebSocket.OPEN) socket.send(new TextEncoder().encode(value)) })
     const binary = term.onBinary(value => { if (socket.readyState === WebSocket.OPEN) socket.send(Uint8Array.from(value, c => c.charCodeAt(0))) })
     const resize = term.onResize(({ cols, rows }) => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'resize', cols, rows })) })
-    const observer = new ResizeObserver(() => fit.fit())
+    const observer = new ResizeObserver(sendSize)
     observer.observe(termRef.current)
     return () => { observer.disconnect(); socket.onclose = null; socket.close(); data.dispose(); binary.dispose(); resize.dispose(); term.dispose() }
   }, [connection])
-  return <main className="ssh-page"><header><div className="brand"><span className="mark">S</span><div><b>WebSSH</b><small>simpleNg · Secure shell</small></div></div><span className="state"><i/>{active ? 'Connected' : 'Disconnected'}</span></header><section className="terminal"><div className="terminal-bar"><span>Terminal</span><button onClick={() => setConnection(value => value + 1)}>Reconnect</button></div><div ref={termRef} className="term"/></section></main>
+  return <main className="ssh-page ssh-fullscreen"><header className="ssh-toolbar"><div className="ssh-title"><b>WebSSH</b><span className="state"><i className={active ? '' : 'offline'}/>{active ? 'Connected' : 'Disconnected'}</span></div><button title="Reconnect" aria-label="Reconnect" onClick={() => setConnection(value => value + 1)}>↻</button></header><div ref={termRef} className="term ssh-viewport"/></main>
 }
 function App() {
   const [collector, setCollector] = useState(false)
