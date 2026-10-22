@@ -120,3 +120,5 @@ docker compose -f docker/ssh-test/compose.yaml up --build -d
 容器 SSH 端口映射到 `127.0.0.1:2222`，测试账号为 `ssh-test`，密码为 `changeme`。该账号仅用于本机测试，可使用 `ssh -p 2222 ssh-test@127.0.0.1` 登录。WebSSH 支持 Linux 主机或容器，只要环境内 `127.0.0.1:22` 有 sshd 监听；Windows 暂不支持。容器也用于集成测试 SSH 登录、PTY 和命令执行。
 
 `file://./`、`collect://./` 和 `ssh://./` 使用 simpleNg 进程的当前工作目录，也支持追加相对子目录，如 `collect://./uploads`；绝对路径使用 `file:///`、`collect:///` 和 `ssh:///`。目录必须存在。收集器上传页面显示每个文件的上传进度、完成状态和错误信息。
+
+WebSSH 页面直接打开终端，在终端的 login / Password 提示中输入 SSH 账号密码，密码不回显。登录后使用 xterm-256color 交互式 PTY，支持窗口尺寸同步及 vim 等全屏程序；断开时保留终端输出和具体错误，可点击 Reconnect 重连。

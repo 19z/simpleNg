@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { flushSync } from 'react-dom'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -41,32 +40,36 @@ function Collector() {
 }
 
 function WebSSH() {
-  const [credentials, setCredentials] = useState({ username: '', password: '' })
-  const [error, setError] = useState('')
-  const [active, setActive] = useState(false)
   const termRef = useRef(null)
-  const socketRef = useRef(null)
-  const fitRef = useRef(null)
-  const start = e => {
-    e.preventDefault(); setError('')
-    flushSync(() => setActive(true))
+  const [connection, setConnection] = useState(0)
+  const [active, setActive] = useState(false)
+  useEffect(() => {
     const term = new Terminal({ cursorBlink: true, fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace', fontSize: 14, theme: { background: '#111820', foreground: '#dce5e8', cursor: '#4dc6a4' } })
-    const fit = new FitAddon(); term.loadAddon(fit); term.open(termRef.current); fit.fit();
-    const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const socket = new WebSocket(`${scheme}//${location.host}/ws/ssh`); socket.binaryType = 'arraybuffer'; socketRef.current = socket; fitRef.current = fit; setActive(true)
-    socket.onopen = () => socket.send(JSON.stringify({ ...credentials, cols: term.cols, rows: term.rows }))
-    socket.onmessage = event => { if (typeof event.data === 'string') { try { setError(JSON.parse(event.data).message || 'Connection failed') } catch { setError(event.data) } socket.close() } else term.write(new Uint8Array(event.data)) }
-    socket.onerror = () => setError('SSH connection failed')
-    socket.onclose = () => { setActive(false); setError('SSH session closed') }
-    term.onData(data => { if (socket.readyState === WebSocket.OPEN) socket.send(new TextEncoder().encode(data)) })
-    term.onResize(({cols, rows}) => { if(socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({type:'resize', cols, rows})) })
-    const onResize = () => { fit.fit(); if(socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({type:'resize',cols:term.cols,rows:term.rows})) }
-    window.addEventListener('resize', onResize)
-    socket.addEventListener('close', () => window.removeEventListener('resize', onResize), { once: true })
-  }
-  return <main className="ssh-page"><header><div className="brand"><span className="mark">S</span><div><b>WebSSH</b><small>simpleNg · Secure shell</small></div></div><span className="state"><i/> SSH</span></header>{!active ? <form className="login" onSubmit={start}><h1>Connect to host</h1><p>Sign in with your SSH account.</p><label>Username<input required autoComplete="username" value={credentials.username} onChange={e=>setCredentials({...credentials,username:e.target.value})}/></label><label>Password<input required type="password" autoComplete="current-password" value={credentials.password} onChange={e=>setCredentials({...credentials,password:e.target.value})}/></label>{error && <p className="error">{error}</p>}<button>Connect <span>→</span></button></form> : <section className="terminal"><div className="terminal-bar"><span><i/> Connected as {credentials.username}</span><button onClick={()=>{socketRef.current?.close();socketRef.current=null;setActive(false)}}>Disconnect</button></div><div ref={termRef} className="term"/></section>}</main>
+    const fit = new FitAddon()
+    term.loadAddon(fit)
+    term.open(termRef.current)
+    fit.fit()
+    const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/ssh`)
+    socket.binaryType = 'arraybuffer'
+    let message = ''
+    socket.onopen = () => { setActive(true); socket.send(JSON.stringify({ cols: term.cols, rows: term.rows })); term.focus() }
+    socket.onmessage = event => {
+      if (typeof event.data === 'string') {
+        try { message = JSON.parse(event.data).message || event.data } catch { message = event.data }
+        term.write(`\r\n${message}\r\n`)
+      } else term.write(new Uint8Array(event.data))
+    }
+    socket.onerror = () => { message = 'SSH connection failed'; term.write(`\r\n${message}\r\n`) }
+    socket.onclose = () => { setActive(false); if (!message) term.write('\r\nSSH session closed\r\n') }
+    const data = term.onData(value => { if (socket.readyState === WebSocket.OPEN) socket.send(new TextEncoder().encode(value)) })
+    const binary = term.onBinary(value => { if (socket.readyState === WebSocket.OPEN) socket.send(Uint8Array.from(value, c => c.charCodeAt(0))) })
+    const resize = term.onResize(({ cols, rows }) => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'resize', cols, rows })) })
+    const observer = new ResizeObserver(() => fit.fit())
+    observer.observe(termRef.current)
+    return () => { observer.disconnect(); socket.onclose = null; socket.close(); data.dispose(); binary.dispose(); resize.dispose(); term.dispose() }
+  }, [connection])
+  return <main className="ssh-page"><header><div className="brand"><span className="mark">S</span><div><b>WebSSH</b><small>simpleNg · Secure shell</small></div></div><span className="state"><i/>{active ? 'Connected' : 'Disconnected'}</span></header><section className="terminal"><div className="terminal-bar"><span>Terminal</span><button onClick={() => setConnection(value => value + 1)}>Reconnect</button></div><div ref={termRef} className="term"/></section></main>
 }
-
 function App() {
   const [collector, setCollector] = useState(false)
   useEffect(() => { fetch('/api/files').then(r=>{ if(r.ok) setCollector(true) }).catch(()=>{}) }, [])

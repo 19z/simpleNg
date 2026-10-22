@@ -119,7 +119,7 @@ On Linux hosts with an SSH daemon listening on `127.0.0.1:22`, expose an SSH ter
 simpleNg --domain shell.example.com --local ssh:///home/admin/something
 ```
 
-The browser prompts for the SSH username and password. The shell starts in the supplied directory. WebSSH is disabled on Windows and inside detected containers.
+The page opens a terminal with login and password prompts. Password input is hidden. After SSH authentication, an interactive xterm-256color PTY starts in the supplied directory, with resize and full-screen terminal support (including vim). WebSSH supports Linux hosts and containers with sshd listening on 127.0.0.1:22; Windows is unsupported.
 
 ### File collector
 

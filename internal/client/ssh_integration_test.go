@@ -39,14 +39,27 @@ func TestSSHIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		ws.SetReadDeadline(time.Now().Add(15 * time.Second))
-		if err := ws.WriteJSON(map[string]any{"username": "ssh-test", "password": password, "cols": 80, "rows": 24}); err != nil {
+		if err := ws.WriteJSON(map[string]any{"cols": 80, "rows": 24}); err != nil {
 			t.Fatal(err)
 		}
-		if password == "incorrect" {
-			_, data, err := ws.ReadMessage()
-			if err != nil || !strings.Contains(string(data), "SSH login failed") {
-				t.Fatalf("invalid login: %s %v", data, err)
+		readUntil := func(marker string) string {
+			t.Helper()
+			var output strings.Builder
+			for !strings.Contains(output.String(), marker) {
+				_, data, err := ws.ReadMessage()
+				if err != nil {
+					t.Fatalf("waiting for %q: %s: %v", marker, output.String(), err)
+				}
+				output.Write(data)
 			}
+			return output.String()
+		}
+		readUntil("login: ")
+		ws.WriteMessage(websocket.BinaryMessage, []byte("ssh-test\r"))
+		readUntil("Password: ")
+		ws.WriteMessage(websocket.BinaryMessage, []byte(password+"\r"))
+		if password == "incorrect" {
+			readUntil("SSH login failed")
 			ws.Close()
 			continue
 		}
@@ -69,6 +82,19 @@ func TestSSHIntegration(t *testing.T) {
 		}
 		if !strings.Contains(output.String(), "/home/ssh-test/work") || !strings.Contains(output.String(), "ssh-test") {
 			t.Fatalf("unexpected shell: %s", output.String())
+		}
+		ws.WriteJSON(map[string]any{"type": "resize", "cols": 100, "rows": 40})
+		ws.WriteMessage(websocket.BinaryMessage, []byte("stty size; printf 'SIZE_%s_OK\\n' TEST\n"))
+		if got := readUntil("SIZE_TEST_OK"); !strings.Contains(got, "40 100") {
+			t.Fatalf("resize: %s", got)
+		}
+		ws.WriteMessage(websocket.BinaryMessage, []byte("vim -Nu NONE -n /tmp/simpleng-vim-test\r"))
+		readUntil("\x1b[?1049h")
+		ws.WriteMessage(websocket.BinaryMessage, []byte("iVIM_TEST_CONTENT\x1b:wq\r"))
+		readUntil("\x1b[?1049l")
+		ws.WriteMessage(websocket.BinaryMessage, []byte("cat /tmp/simpleng-vim-test; printf 'VIM_%s_OK\\n' TEST\n"))
+		if got := readUntil("VIM_TEST_OK"); !strings.Contains(got, "VIM_TEST_CONTENT") {
+			t.Fatalf("vim: %s", got)
 		}
 		ws.Close()
 		t.Log("password authentication, PTY, working directory and shell command passed")

@@ -1,8 +1,9 @@
 FROM debian:bookworm-slim
 
 RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server vim-tiny \
     && rm -rf /var/lib/apt/lists/* \
+    && ln -s /usr/bin/vim.tiny /usr/local/bin/vim \
     && mkdir -p /run/sshd /home/ssh-test/work \
     && useradd --create-home --shell /bin/bash ssh-test \
     && chown -R ssh-test:ssh-test /home/ssh-test \

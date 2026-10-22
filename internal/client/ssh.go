@@ -35,18 +35,25 @@ func (h *sshHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ws.Close()
 	var login struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-		Columns  int    `json:"cols"`
-		Rows     int    `json:"rows"`
+		Columns int `json:"cols"`
+		Rows    int `json:"rows"`
 	}
-	if ws.ReadJSON(&login) != nil || login.Username == "" {
+	if ws.ReadJSON(&login) != nil {
 		return
 	}
-	config := &ssh.ClientConfig{User: login.Username, Auth: []ssh.AuthMethod{ssh.Password(login.Password)}, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 8 * time.Second}
+	input := &terminalLogin{ws: ws}
+	username, err := input.readLine("login: ", true)
+	if err != nil {
+		return
+	}
+	password, err := input.readLine("Password: ", false)
+	if err != nil {
+		return
+	}
+	config := &ssh.ClientConfig{User: username, Auth: []ssh.AuthMethod{ssh.Password(password)}, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 8 * time.Second}
 	conn, err := ssh.Dial("tcp", "127.0.0.1:22", config)
 	if err != nil {
-		ws.WriteJSON(map[string]string{"type": "error", "message": "SSH login failed"})
+		ws.WriteJSON(map[string]string{"type": "error", "message": "SSH login failed: " + err.Error()})
 		return
 	}
 	defer conn.Close()
@@ -78,9 +85,12 @@ func (h *sshHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	if err := session.Start("cd " + shellQuote(h.directory) + " && exec ${SHELL:-/bin/sh} -l"); err != nil {
+	if err := session.Start("cd " + shellQuote(h.directory) + " && exec ${SHELL:-/bin/sh} -i"); err != nil {
 		ws.WriteJSON(map[string]string{"type": "error", "message": "Could not start shell"})
 		return
+	}
+	if len(input.pending) > 0 {
+		_, _ = in.Write(input.pending)
 	}
 	var writeMu sync.Mutex
 	write := func(kind int, data []byte) error {
@@ -132,6 +142,61 @@ func (h *sshHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	select {
 	case <-done:
 	case <-waitDone:
+		_ = write(websocket.TextMessage, []byte(`{"type":"error","message":"Remote shell exited"}`))
+	}
+}
+
+// Login input stays in the terminal; passwords are never echoed to the browser.
+type terminalLogin struct {
+	ws      *websocket.Conn
+	pending []byte
+}
+
+func (t *terminalLogin) readLine(prompt string, echo bool) (string, error) {
+	if err := t.ws.WriteMessage(websocket.BinaryMessage, []byte(prompt)); err != nil {
+		return "", err
+	}
+	var line []byte
+	for {
+		if len(t.pending) == 0 {
+			kind, data, err := t.ws.ReadMessage()
+			if err != nil {
+				return "", err
+			}
+			if kind != websocket.BinaryMessage {
+				continue
+			}
+			t.pending = data
+		}
+		b := t.pending[0]
+		t.pending = t.pending[1:]
+		switch b {
+		case '\r', '\n':
+			if b == '\r' && len(t.pending) > 0 && t.pending[0] == '\n' {
+				t.pending = t.pending[1:]
+			}
+			if err := t.ws.WriteMessage(websocket.BinaryMessage, []byte("\r\n")); err != nil {
+				return "", err
+			}
+			return string(line), nil
+		case 3:
+			line = nil
+			_ = t.ws.WriteMessage(websocket.BinaryMessage, []byte("^C\r\n"+prompt))
+		case 127, 8:
+			if len(line) > 0 {
+				line = line[:len(line)-1]
+				if echo {
+					_ = t.ws.WriteMessage(websocket.BinaryMessage, []byte("\b \b"))
+				}
+			}
+		default:
+			if b >= 32 && len(line) < 4096 {
+				line = append(line, b)
+				if echo {
+					_ = t.ws.WriteMessage(websocket.BinaryMessage, []byte{b})
+				}
+			}
+		}
 	}
 }
 
