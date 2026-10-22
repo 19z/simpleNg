@@ -18,7 +18,7 @@ type directoryHandler struct {
 // NewDirectoryHandler serves a local directory named by an absolute file URL.
 func NewDirectoryHandler(root string) (http.Handler, error) {
 	parsed, err := url.Parse(root)
-	if err != nil || !strings.EqualFold(parsed.Scheme, "file") || parsed.Host != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+	if err != nil || !strings.EqualFold(parsed.Scheme, "file") || (parsed.Host != "" && parsed.Host != ".") || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
 		return nil, fmt.Errorf("local directory must be a file:/// URL: %q", root)
 	}
 	directory := parsed.Path
@@ -26,6 +26,12 @@ func NewDirectoryHandler(root string) (http.Handler, error) {
 		return nil, fmt.Errorf("file URL must specify a directory")
 	}
 	directory = filepath.FromSlash(directory)
+	if parsed.Host == "." {
+		directory, err = filepath.Abs(filepath.FromSlash(strings.TrimPrefix(parsed.Path, "/")))
+		if err != nil {
+			return nil, err
+		}
+	}
 	if filepath.Separator == '\\' && len(directory) >= 3 && directory[0] == '\\' && directory[2] == ':' {
 		directory = directory[1:]
 	}

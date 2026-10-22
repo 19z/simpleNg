@@ -63,6 +63,16 @@ func TestLocalURLParsing(t *testing.T) {
 	if _, err := NewLocalHandler(collectURL); err != nil {
 		t.Fatal(err)
 	}
+	relativeRoot := filepath.Join("collect-relative-test")
+	if err := os.Mkdir(relativeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(relativeRoot)
+	for _, value := range []string{"file://./collect-relative-test", "file://./", "collect://./", "collect://./collect-relative-test"} {
+		if _, err := NewLocalHandler(value); err != nil {
+			t.Fatalf("relative URL %q: %v", value, err)
+		}
+	}
 	if runtime.GOOS == "windows" {
 		if _, err := NewLocalHandler("ssh:///C:/tmp"); err == nil {
 			t.Fatal("SSH should be unsupported on Windows")

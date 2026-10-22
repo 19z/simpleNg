@@ -107,4 +107,16 @@ simpleNg --domain some.example.com --local file:///home/user/example/
 
 目录必须存在，使用绝对 `file:///` URL。路径含空格时可为整个参数加引号，`#`、`%` 等 URL 特殊字符需要百分号编码。访问目录时优先使用 `index.html`，不存在时使用 `index.htm`；均不存在时显示目录列表。支持静态资源、HEAD、Range 与条件请求，目录外的文件和符号链接目标不能访问。
 
-因保护数据安全，本项目不提供演示服务器。
+因保护数据安全，本项目不提供公网演示服务器。
+
+### WebSSH 测试环境
+
+使用 Docker Compose 启动本地 Linux SSH 测试容器：
+
+```sh
+docker compose -f docker/ssh-test/compose.yaml up --build -d
+```
+
+容器 SSH 端口映射到 `127.0.0.1:2222`，测试账号为 `ssh-test`，密码为 `changeme`。该账号仅用于本机测试，可使用 `ssh -p 2222 ssh-test@127.0.0.1` 登录。WebSSH 支持 Linux 主机或容器，只要环境内 `127.0.0.1:22` 有 sshd 监听；Windows 暂不支持。容器也用于集成测试 SSH 登录、PTY 和命令执行。
+
+`file://./`、`collect://./` 和 `ssh://./` 使用 simpleNg 进程的当前工作目录，也支持追加相对子目录，如 `collect://./uploads`；绝对路径使用 `file:///`、`collect:///` 和 `ssh:///`。目录必须存在。收集器上传页面显示每个文件的上传进度、完成状态和错误信息。
