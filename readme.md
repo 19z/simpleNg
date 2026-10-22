@@ -35,3 +35,13 @@ Then open `http://app.example.com:8066` (or `https://app.example.com` when using
 For any local URL, `./` refers to the process working directory. For example, `file://./` serves it and `collect://./` stores uploads there. Directories must already exist. On Windows, use paths such as `file:///C:/site` and `collect:///C:/uploads`.
 
 Run `simpleNg --help` for command options and examples.
+
+## Online Linux shell image
+
+```sh
+docker run -d --name online-shell -e DOMAIN=hello.example.com -e ROOTPWD=123456 ghcr.io/19z/simpleng-shell:latest
+```
+
+Point `DOMAIN` at an existing simpleNg server, open the domain in a browser, and log in as `root` using `ROOTPWD`. No container port mapping or inbound ports are required; outbound access to the server is needed. Use `passwd` to change the password, `apt-get update && apt-get install vim` to install software, or `simpleNg --domain app.example.com --local 127.0.0.1:8080` to publish another service.
+
+The password is initialized only on the first start. Restarting the same container preserves password changes and installed software; recreating it starts fresh. The Publish online shell container workflow publishes amd64/arm64 images on master updates or manual dispatch.

@@ -89,6 +89,8 @@ func (h *sshHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	shell := "exec ${SHELL:-/bin/sh} -i"
 	if h.directory != "" {
 		shell = "cd " + shellQuote(h.directory) + " && " + shell
+	} else {
+		shell = `cd "$HOME" && ` + shell
 	}
 	if err := session.Start(shell); err != nil {
 		ws.WriteJSON(map[string]string{"type": "error", "message": "Could not start shell"})
@@ -96,9 +98,6 @@ func (h *sshHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(input.pending) > 0 {
 		_, _ = in.Write(input.pending)
-	}
-	if h.directory == "" {
-		_, _ = in.Write([]byte("cd; clear\n"))
 	}
 	var writeMu sync.Mutex
 	write := func(kind int, data []byte) error {
